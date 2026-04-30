@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment files
+.env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Cache
+.cache/
+tmp/
+*.tmp
+*.temp
+
+# Debug logs
+debug-*.log
+
+# Personal files
+*.txt
+!README.md
+!LICENSE
+
+# Screenshots
+*.png
+*.jpg
+*.jpeg
+*.gif
+!public/icons/*.png
+
+# Console output
+console-*.log
+output-*.log
+
+# Package lock files (optional - uncomment if you prefer to track them)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml

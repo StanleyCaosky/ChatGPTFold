@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ChatGPT Long Conversation Stabilizer</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <h1>Long Conversation Stabilizer</h1>
+
+    <div class="settings-group">
+      <label class="setting-row">
+        <span>启用插件</span>
+        <input type="checkbox" id="enabled" checked>
+      </label>
+
+      <label class="setting-row">
+        <span>自动折叠长消息</span>
+        <input type="checkbox" id="autoCollapseEnabled" checked>
+      </label>
+
+      <div class="setting-row">
+        <span>折叠行数</span>
+        <select id="collapsedLines">
+          <option value="3">3</option>
+          <option value="5">5</option>
+          <option value="10">10</option>
+        </select>
+      </div>
+
+      <div class="setting-row">
+        <span>视口占比阈值</span>
+        <input type="number" id="minViewportRatioToCollapse" min="0.1" max="2" step="0.05">
+      </div>
+
+      <div class="setting-row">
+        <span>最小高度(px)</span>
+        <input type="number" id="minRenderedHeightToCollapsePx" min="100" step="50">
+      </div>
+
+      <div class="setting-row">
+        <span>最小字符数(兜底)</span>
+        <input type="number" id="minCharsToCollapse" min="500" step="500">
+      </div>
+
+      <div class="setting-row">
+        <span>最近N条不做重型优化</span>
+        <input type="number" id="recentCount" min="0" step="5">
+      </div>
+
+      <label class="setting-row">
+        <span>顶部暂停优化</span>
+        <input type="checkbox" id="pauseNearTop" checked>
+      </label>
+
+      <label class="setting-row">
+        <span>显示状态角标</span>
+        <input type="checkbox" id="showStatusBadge" checked>
+      </label>
+
+      <label class="setting-row">
+        <span>实验性 CSS containment</span>
+        <input type="checkbox" id="experimentalContainmentEnabled">
+      </label>
+    </div>
+
+    <div class="actions">
+      <button id="restore">恢复页面</button>
+      <button id="disable">禁用插件</button>
+      <button id="reload">刷新页面</button>
+    </div>
+
+    <div id="status" class="status-box"></div>
+  </div>
+
+  <script src="popup.ts" type="module"></script>
+</body>
+</html>
