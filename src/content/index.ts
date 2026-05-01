@@ -11,6 +11,7 @@ import { initScrollListener, recordError } from './safety';
 import { cleanupAll, cleanupPageModifications, clearTransientMarks } from './cleanup';
 import { createStatusBadge, updateStatusBadge, removeStatusBadge, getContentStatus } from './statusBadge';
 import { initDebug } from './debug';
+import { initGenealogySystem, cleanupGenealogyUI } from './conversationGenealogyPanel';
 import { PopupMessage } from '../shared/types';
 
 let config: Config | null = null;
@@ -75,10 +76,14 @@ function onThreadFound(thread: HTMLElement): void {
     enqueueAll(t);
     updateStatusBadge();
   }, 1500);
+
+  // Initialize conversation genealogy system
+  initGenealogySystem();
 }
 
 function onThreadLost(): void {
   cleanupPageModifications();
+  cleanupGenealogyUI();
   updateStatusBadge();
 }
 
@@ -89,6 +94,7 @@ function handleConfigChanged(newConfig: Config): void {
 
   if (!newConfig.enabled) {
     cleanupAll();
+    cleanupGenealogyUI();
     removeStyles();
     removeStatusBadge();
     return;

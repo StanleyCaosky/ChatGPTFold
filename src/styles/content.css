@@ -220,3 +220,275 @@
   background: rgba(200, 150, 0, 0.9);
   color: #fff;
 }
+
+/* ── Branch Map button ────────────────────────────────────────────── */
+
+.longconv-branch-map-btn {
+  position: fixed;
+  bottom: 52px;
+  right: 16px;
+  z-index: 99998;
+  background: var(--longconv-btn-bg);
+  color: var(--longconv-btn-color);
+  border: 1px solid var(--longconv-btn-border);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  font-family: monospace;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  user-select: none;
+}
+
+.longconv-branch-map-btn:hover,
+.longconv-branch-map-btn:focus-visible {
+  background: var(--longconv-btn-hover);
+  border-color: var(--longconv-btn-hover-border);
+  color: var(--longconv-btn-hover-color);
+}
+
+/* ── Branch Panel ─────────────────────────────────────────────────── */
+
+.longconv-branch-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 360px;
+  z-index: 99997;
+  background: var(--longconv-bg);
+  border-left: 1px solid var(--longconv-btn-border);
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  color: var(--longconv-btn-color);
+}
+
+.longconv-branch-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--longconv-btn-border);
+  flex-shrink: 0;
+}
+
+.longconv-branch-panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--longconv-btn-hover-color);
+}
+
+.longconv-branch-panel-close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--longconv-btn-color);
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.longconv-branch-panel-close:hover {
+  background: var(--longconv-btn-hover);
+  color: var(--longconv-btn-hover-color);
+}
+
+.longconv-branch-record-btn {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 12px 16px;
+  padding: 7px 14px;
+  background: var(--longconv-btn-bg);
+  border: 1px solid var(--longconv-btn-border);
+  border-radius: 6px;
+  color: var(--longconv-btn-color);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+
+.longconv-branch-record-btn:hover {
+  background: var(--longconv-btn-hover);
+  border-color: var(--longconv-btn-hover-border);
+  color: var(--longconv-btn-hover-color);
+}
+
+/* ── Branch Tree ──────────────────────────────────────────────────── */
+
+.longconv-branch-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.longconv-branch-tree-hint {
+  padding: 8px 16px 0 16px;
+  font-size: 11px;
+  color: var(--longconv-btn-color);
+  line-height: 1.5;
+}
+
+.longconv-branch-row {
+  display: block;
+  padding: 2px 8px 2px 8px;
+  border-left: 2px solid var(--longconv-btn-border);
+  margin-left: 0;
+  transition: background 0.1s;
+  text-decoration: none;
+  color: inherit;
+}
+
+.longconv-branch-row:hover {
+  background: var(--longconv-btn-hover);
+}
+
+.longconv-branch-row-active {
+  background: rgba(59, 130, 246, 0.1);
+  border-left-color: #3b82f6;
+}
+
+.longconv-branch-row-active:hover {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.longconv-branch-row-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.longconv-branch-toggle {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--longconv-btn-color);
+  cursor: pointer;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin-top: 1px;
+}
+
+.longconv-branch-toggle:hover {
+  background: var(--longconv-btn-hover);
+  color: var(--longconv-btn-hover-color);
+}
+
+.longconv-branch-toggle[disabled] {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.longconv-branch-toggle[disabled]:hover {
+  background: transparent;
+  color: var(--longconv-btn-color);
+}
+
+.longconv-branch-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+  padding: 3px 4px;
+  border-radius: 6px;
+}
+
+.longconv-branch-row-main:hover {
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.longconv-branch-row-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--longconv-btn-hover-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.longconv-branch-row-meta {
+  font-size: 11px;
+  color: var(--longconv-btn-color);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.longconv-branch-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--longconv-btn-color);
+  font-size: 12px;
+}
+
+.longconv-branch-map-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100001;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.longconv-branch-map-card {
+  width: min(1100px, 100%);
+  height: min(760px, 100%);
+  background: var(--longconv-bg);
+  border: 1px solid var(--longconv-btn-border);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.24);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.longconv-branch-map-canvas {
+  flex: 1;
+  overflow: auto;
+  padding: 24px;
+}
+
+.longconv-branch-map-node {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+  max-width: 260px;
+  padding: 10px 12px;
+  border: 1px solid var(--longconv-btn-border);
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.04);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.longconv-branch-map-node:hover {
+  border-color: var(--longconv-btn-hover-border);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.longconv-branch-map-node.longconv-branch-row-active {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: #3b82f6;
+}
+
+.longconv-branch-map-children {
+  display: flex;
+  gap: 28px;
+  margin-top: 18px;
+  padding-left: 28px;
+  border-left: 2px solid var(--longconv-btn-border);
+}
