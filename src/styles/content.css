@@ -444,51 +444,330 @@
 }
 
 .longconv-branch-map-card {
-  width: min(1100px, 100%);
-  height: min(760px, 100%);
+  position: relative;
+  width: min(1380px, calc(100vw - 40px));
+  height: min(880px, calc(100vh - 40px));
   background: var(--longconv-bg);
   border: 1px solid var(--longconv-btn-border);
-  border-radius: 12px;
+  border-radius: 18px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.24);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-.longconv-branch-map-canvas {
+.longconv-branch-map-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--longconv-btn-border);
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.06), rgba(59, 130, 246, 0.02));
+}
+
+.longconv-branch-map-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.longconv-branch-map-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--longconv-btn-hover-color);
+}
+
+.longconv-branch-map-toggle input {
+  margin: 0;
+}
+
+.longconv-branch-map-toolbar .longconv-branch-record-btn {
+  width: auto;
+  margin: 0;
+  min-width: 76px;
+}
+
+.longconv-branch-map-viewport {
+  position: relative;
   flex: 1;
-  overflow: auto;
-  padding: 24px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.08), transparent 22%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 35%);
+  cursor: grab;
+}
+
+.longconv-branch-map-canvas {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.longconv-branch-map-svg,
+.longconv-branch-map-nodes {
+  position: absolute;
+  inset: 0;
+}
+
+.longconv-branch-map-nodes {
+  pointer-events: none;
+}
+
+.longconv-branch-map-edge {
+  stroke: rgba(130, 146, 180, 0.62);
+  stroke-width: 2;
+}
+
+.longconv-branch-map-edge-active {
+  stroke: #4f8cff;
+  stroke-width: 2.4;
+  filter: drop-shadow(0 0 4px rgba(79, 140, 255, 0.28));
 }
 
 .longconv-branch-map-node {
-  display: inline-flex;
+  position: absolute;
+  display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 180px;
-  max-width: 260px;
-  padding: 10px 12px;
-  border: 1px solid var(--longconv-btn-border);
-  border-radius: 10px;
-  background: rgba(59, 130, 246, 0.04);
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border: 1px solid rgba(110, 135, 190, 0.22);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.1), rgba(59, 130, 246, 0.04));
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  pointer-events: auto;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease, background 0.14s ease;
 }
 
 .longconv-branch-map-node:hover {
-  border-color: var(--longconv-btn-hover-border);
-  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(79, 140, 255, 0.42);
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.14), rgba(59, 130, 246, 0.06));
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+  transform: translateY(-1px);
 }
 
 .longconv-branch-map-node.longconv-branch-row-active {
-  background: rgba(59, 130, 246, 0.14);
-  border-color: #3b82f6;
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.22), rgba(59, 130, 246, 0.1));
+  border-color: #4f8cff;
+  box-shadow: 0 16px 34px rgba(59, 130, 246, 0.2);
 }
 
-.longconv-branch-map-children {
+.longconv-branch-map-node-header {
   display: flex;
-  gap: 28px;
-  margin-top: 18px;
-  padding-left: 28px;
-  border-left: 2px solid var(--longconv-btn-border);
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.longconv-branch-map-node-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.longconv-branch-map-node-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--longconv-btn-hover-color);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.longconv-branch-map-node-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.longconv-branch-map-node-badge,
+.longconv-branch-map-collapsed-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.6;
+  background: rgba(59, 130, 246, 0.12);
+  color: #3973dd;
+  border: 1px solid rgba(59, 130, 246, 0.18);
+}
+
+.longconv-branch-map-collapsed-badge {
+  margin-top: 2px;
+}
+
+.longconv-branch-map-node-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.longconv-branch-map-icon-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  border: 1px solid var(--longconv-btn-border);
+  background: rgba(255, 255, 255, 0.42);
+  color: var(--longconv-btn-hover-color);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.longconv-branch-map-icon-btn:hover {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(79, 140, 255, 0.42);
+}
+
+.longconv-branch-map-note-preview {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(110, 135, 190, 0.22);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--longconv-btn-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.longconv-branch-map-tooltip,
+.longconv-branch-map-note-editor {
+  position: absolute;
+  z-index: 2;
+  max-width: 320px;
+  background: color-mix(in srgb, var(--longconv-bg) 94%, #0f172a 6%);
+  border: 1px solid var(--longconv-btn-border);
+  border-radius: 12px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.24);
+}
+
+.longconv-branch-map-tooltip {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--longconv-btn-hover-color);
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.longconv-branch-map-note-editor {
+  width: 320px;
+  padding: 12px;
+}
+
+.longconv-branch-map-note-editor textarea {
+  width: 100%;
+  margin-top: 10px;
+  min-height: 88px;
+  resize: vertical;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--longconv-btn-border);
+  background: rgba(255, 255, 255, 0.42);
+  color: var(--longconv-btn-hover-color);
+  font: inherit;
+}
+
+.longconv-branch-map-note-editor-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.longconv-branch-map-note-editor-actions .longconv-branch-record-btn {
+  width: auto;
+  margin: 0;
+}
+
+.longconv-branch-map-controls {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--longconv-bg) 90%, #111827 10%);
+  border: 1px solid var(--longconv-btn-border);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+}
+
+.longconv-branch-map-control-btn {
+  min-width: 40px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--longconv-btn-border);
+  background: var(--longconv-btn-bg);
+  color: var(--longconv-btn-hover-color);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.longconv-branch-map-control-btn:hover {
+  background: var(--longconv-btn-hover);
+  border-color: var(--longconv-btn-hover-border);
+}
+
+.longconv-branch-map-hint {
+  margin-top: 8px;
+  color: var(--longconv-btn-color);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dark .longconv-branch-map-toolbar {
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.16), rgba(59, 130, 246, 0.04));
+}
+
+.dark .longconv-branch-map-viewport {
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 26%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 40%),
+    #191919;
+}
+
+.dark .longconv-branch-map-node {
+  border-color: rgba(116, 150, 226, 0.24);
+  background: linear-gradient(180deg, rgba(41, 82, 155, 0.36), rgba(26, 34, 56, 0.7));
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+}
+
+.dark .longconv-branch-map-node:hover {
+  border-color: rgba(111, 166, 255, 0.5);
+  background: linear-gradient(180deg, rgba(49, 97, 184, 0.42), rgba(30, 42, 70, 0.76));
+}
+
+.dark .longconv-branch-map-node.longconv-branch-row-active {
+  border-color: #69a1ff;
+  background: linear-gradient(180deg, rgba(58, 104, 193, 0.55), rgba(26, 48, 88, 0.82));
+}
+
+.dark .longconv-branch-map-icon-btn,
+.dark .longconv-branch-map-note-editor textarea {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.dark .longconv-branch-map-node-badge,
+.dark .longconv-branch-map-collapsed-badge {
+  background: rgba(105, 161, 255, 0.14);
+  color: #a9c7ff;
+  border-color: rgba(105, 161, 255, 0.22);
 }

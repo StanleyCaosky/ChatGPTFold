@@ -98,6 +98,16 @@ export async function resetGenealogyGraph(): Promise<void> {
   await chrome.storage.local.remove(STORAGE_KEY);
 }
 
+export async function updateConversationNodeNote(conversationId: string, note: string): Promise<void> {
+  const { graph } = await loadGenealogyGraph();
+  const existing = graph.nodes[conversationId];
+  if (!existing) return;
+  const trimmed = note.trim();
+  if (trimmed) existing.note = trimmed;
+  else delete existing.note;
+  await saveGenealogyGraph(graph);
+}
+
 export function normalizeTitle(title: string): string {
   return title
     .trim()

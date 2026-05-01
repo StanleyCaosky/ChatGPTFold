@@ -17,6 +17,7 @@ import {
   resolveParentTitle,
   resolvePlaceholders,
   saveGenealogyGraph,
+  updateConversationNodeNote,
   upsertConversationEdge,
   upsertConversationNode,
 } from '../../src/content/conversationGenealogyStore';
@@ -419,5 +420,37 @@ describe('storage', () => {
     const graph = createEmptyGenealogyGraph();
     await saveGenealogyGraph(graph);
     expect((store['longconv_conversation_genealogy'] as { schemaVersion: number }).schemaVersion).toBe(GENEALOGY_SCHEMA_VERSION);
+  });
+
+  it('stores note by conversationId and preserves it across title updates', async () => {
+    const graph = createEmptyGenealogyGraph();
+    upsertConversationNode(graph, {
+      conversationId: 'conv-note',
+      idSource: 'current-url',
+      title: 'Original Title',
+      url: 'https://chatgpt.com/c/conv-note',
+      normalizedTitle: normalizeTitle('Original Title'),
+      source: 'current-page',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    });
+    await saveGenealogyGraph(graph);
+    await updateConversationNodeNote('conv-note', 'remember this');
+
+    const stored = (store['longconv_conversation_genealogy'] as { nodes: Record<string, { note?: string }> }).nodes['conv-note'];
+    expect(stored.note).toBe('remember this');
+
+    const reloaded = (await loadGenealogyGraph()).graph;
+    upsertConversationNode(reloaded, {
+      conversationId: 'conv-note',
+      idSource: 'current-url',
+      title: 'Renamed Title',
+      url: 'https://chatgpt.com/c/conv-note',
+      normalizedTitle: normalizeTitle('Renamed Title'),
+      source: 'current-page',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    });
+    expect(reloaded.nodes['conv-note'].note).toBe('remember this');
   });
 });
