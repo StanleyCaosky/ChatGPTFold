@@ -4,6 +4,12 @@
   --longconv-btn-bg: rgba(0, 0, 0, 0.05);
   --longconv-btn-hover: rgba(0, 0, 0, 0.1);
   --longconv-btn-color: #666;
+  --longconv-btn-border: rgba(0, 0, 0, 0.12);
+  --longconv-btn-hover-border: rgba(0, 0, 0, 0.2);
+  --longconv-btn-hover-color: #333;
+  --longconv-user-bubble-bg: rgb(244, 244, 244);
+  --longconv-user-toggle-bg: rgba(244, 244, 244, 0.7);
+  --longconv-user-toggle-hover-bg: rgba(244, 244, 244, 0.85);
   --longconv-badge-bg: rgba(0, 0, 0, 0.75);
   --longconv-badge-color: #fff;
 }
@@ -13,9 +19,17 @@
   --longconv-btn-bg: rgba(255, 255, 255, 0.1);
   --longconv-btn-hover: rgba(255, 255, 255, 0.15);
   --longconv-btn-color: #aaa;
+  --longconv-btn-border: rgba(255, 255, 255, 0.15);
+  --longconv-btn-hover-border: rgba(255, 255, 255, 0.25);
+  --longconv-btn-hover-color: #ddd;
+  --longconv-user-bubble-bg: rgb(48, 48, 48);
+  --longconv-user-toggle-bg: rgba(64, 64, 64, 0.7);
+  --longconv-user-toggle-hover-bg: rgba(64, 64, 64, 0.85);
   --longconv-badge-bg: rgba(255, 255, 255, 0.85);
   --longconv-badge-color: #111;
 }
+
+/* ── Assistant collapsed ─────────────────────────────────────────────── */
 
 .longconv-collapsed {
   max-height: var(--longconv-collapsed-height, 72px);
@@ -34,46 +48,150 @@
   pointer-events: none;
 }
 
-.longconv-toggle-wrap {
-  height: 0;
-  overflow: visible;
+/* ── Safety: prevent assistant ::from leaking into user bubbles ──────── */
+
+.longconv-user-bubble-root.longconv-collapsed::after,
+.longconv-user-collapsed.longconv-collapsed::after {
+  content: none !important;
+  display: none !important;
+}
+
+/* ── Assistant external toggles ──────────────────────────────────────── */
+
+.longconv-top-toggle,
+.longconv-bottom-toggle {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0;
+}
+
+.longconv-top-toggle.longconv-assistant-toggle,
+.longconv-bottom-toggle.longconv-assistant-toggle {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0;
+}
+
+/* ── User fallback external toggles (right-aligned) ──────────────────── */
+
+.longconv-top-toggle.longconv-user-toggle,
+.longconv-bottom-toggle.longconv-user-toggle {
   display: flex;
   justify-content: flex-end;
-  position: relative;
-  z-index: 10;
+  padding: 4px 0;
+  width: fit-content;
+  margin-left: auto;
 }
 
-.longconv-toggle-btn {
-  opacity: 0;
-  pointer-events: none;
-  display: flex;
+.longconv-user-toggle .longconv-top-toggle-btn,
+.longconv-user-toggle .longconv-bottom-toggle-btn {
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+.longconv-top-toggle-btn,
+.longconv-bottom-toggle-btn {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 4px;
+  gap: 4px;
+  padding: 4px 14px;
+  border: 1px solid var(--longconv-btn-border);
+  border-radius: 999px;
   background: var(--longconv-btn-bg);
   color: var(--longconv-btn-color);
+  font-size: 13px;
+  line-height: 1.4;
   cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-  padding: 0;
-  transition: opacity 0.15s, background 0.15s;
-  position: relative;
-  top: 4px;
-  right: 4px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  user-select: none;
 }
 
-[data-testid^="conversation-turn-"]:hover .longconv-toggle-btn,
-.longconv-toggle-btn:focus-visible {
-  opacity: 1;
+.longconv-top-toggle-btn:hover,
+.longconv-bottom-toggle-btn:hover,
+.longconv-top-toggle-btn:focus-visible,
+.longconv-bottom-toggle-btn:focus-visible {
+  background: var(--longconv-btn-hover);
+  border-color: var(--longconv-btn-hover-border);
+  color: var(--longconv-btn-hover-color);
+}
+
+/* ── User bubble root ────────────────────────────────────────────────── */
+
+.longconv-user-bubble-root {
+  position: relative;
+  border-radius: inherit;
+}
+
+/* ── User collapsed (completely independent from .longconv-collapsed) ── */
+
+.longconv-user-collapsed {
+  max-height: var(--longconv-collapsed-height, 72px);
+  overflow: hidden;
+  position: relative;
+  border-radius: inherit;
+  padding-bottom: 2.6em;
+}
+
+.longconv-user-collapsed::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4.2em;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0),
+    var(--longconv-user-bubble-bg)
+  );
+  pointer-events: none;
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
+  z-index: 1;
+}
+
+/* ── User inline toggle ──────────────────────────────────────────────── */
+
+.longconv-user-bubble-root:not(.longconv-user-collapsed) .longconv-user-inline-toggle {
+  position: static;
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
   pointer-events: auto;
 }
 
-.longconv-toggle-btn:hover {
-  background: var(--longconv-btn-hover);
+.longconv-user-collapsed .longconv-user-inline-toggle {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  z-index: 2;
+  pointer-events: none;
 }
+
+.longconv-user-inline-toggle-btn {
+  pointer-events: auto;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  border: 1px solid var(--longconv-btn-border);
+  background: var(--longconv-user-toggle-bg);
+  color: var(--longconv-btn-color);
+  opacity: 0.95;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  user-select: none;
+}
+
+.longconv-user-inline-toggle-btn:hover,
+.longconv-user-inline-toggle-btn:focus-visible {
+  background: var(--longconv-user-toggle-hover-bg);
+  border-color: var(--longconv-btn-hover-border);
+  color: var(--longconv-btn-hover-color);
+  opacity: 1;
+}
+
+/* ── Status badge ────────────────────────────────────────────────────── */
 
 .longconv-status-badge {
   position: fixed;

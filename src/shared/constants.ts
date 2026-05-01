@@ -16,6 +16,15 @@ export const CLASS_NAMES = {
   collapsed: 'longconv-collapsed',
   toggleWrap: 'longconv-toggle-wrap',
   toggleBtn: 'longconv-toggle-btn',
+  topToggle: 'longconv-top-toggle',
+  bottomToggle: 'longconv-bottom-toggle',
+  topToggleBtn: 'longconv-top-toggle-btn',
+  bottomToggleBtn: 'longconv-bottom-toggle-btn',
+  userBubbleRoot: 'longconv-user-bubble-root',
+  userCollapseTarget: 'longconv-user-collapse-target',
+  userCollapsed: 'longconv-user-collapsed',
+  userInlineToggle: 'longconv-user-inline-toggle',
+  userInlineToggleBtn: 'longconv-user-inline-toggle-btn',
   badge: 'longconv-status-badge',
 } as const;
 
