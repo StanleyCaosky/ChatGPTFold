@@ -32,6 +32,7 @@ import { PopupMessage, GenealogyStatsResponse } from '../shared/types';
 import { loadGenealogyGraph } from './conversationGenealogyStore';
 import { getCurrentConversation, scanSidebarCatalog } from './conversationGenealogyScanner';
 import { debugError, debugLog } from './logger';
+import { cleanupConversationDeletionObserver, initConversationDeletionObserver } from './conversationDeletionObserver';
 import {
   ensureActiveContentScript,
   registerDisposeCallback,
@@ -98,6 +99,7 @@ async function main(): Promise<void> {
   }
 
   initDebug();
+  initConversationDeletionObserver();
   initGenealogyAutoScan(config, (diagnostics) => {
     if (!config) return;
     loadGenealogyGraph().then(({ graph }) => {
@@ -165,6 +167,7 @@ function handleConfigChanged(newConfig: Config): void {
     cleanupAll();
     cleanupGenealogyUI();
     cleanupGenealogyAutoScan();
+    cleanupConversationDeletionObserver();
     removeStyles();
     removeStatusBadge();
     return;
@@ -288,7 +291,8 @@ function handleMessages(): void {
             const response: GenealogyStatsResponse = {
               nodeCount: Object.keys(graph.nodes).length,
               edgeCount: graph.edges.length,
-              staleNodeCount: Object.values(graph.nodes).filter((node) => node.stale || node.missing).length,
+              staleNodeCount: Object.values(graph.nodes).filter((node) => !node.deletedAt && (node.stale || node.missing)).length,
+              deletedNodeCount: Object.values(graph.nodes).filter((node) => !!node.deletedAt).length,
               unresolvedNodeCount: Object.values(graph.nodes).filter((node) => node.unresolved).length,
               currentConversationId: graph.currentConversationId ?? 'unknown',
               lastAutoScanAt: getLastAutoScanAt(),
@@ -300,6 +304,7 @@ function handleMessages(): void {
               nodeCount: 0,
               edgeCount: 0,
               staleNodeCount: 0,
+              deletedNodeCount: 0,
               unresolvedNodeCount: 0,
               currentConversationId: 'unknown',
               lastAutoScanAt: getLastAutoScanAt(),

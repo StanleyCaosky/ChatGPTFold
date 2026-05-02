@@ -210,4 +210,33 @@ describe('graph comparison and save skipping', () => {
     expect(second.graphChanged).toBe(false);
     expect(mockChrome.storage.local.set.mock.calls.length).toBe(setCallsAfterFirst);
   });
+
+  it('does not delete nodes just because they are not in the current sidebar', async () => {
+    vi.spyOn(window, 'location', 'get').mockReturnValue({
+      pathname: '/',
+      origin: 'https://chatgpt.com',
+    } as Location);
+    store['longconv_conversation_genealogy'] = {
+      schemaVersion: 4,
+      nodes: {
+        X: {
+          conversationId: 'X',
+          idSource: 'sidebar-url',
+          title: 'X',
+          url: 'https://chatgpt.com/c/X',
+          normalizedTitle: 'x',
+          source: 'metadata',
+          firstSeenAt: 1,
+          lastSeenAt: 1,
+        },
+      },
+      edges: [],
+      updatedAt: 1,
+    };
+
+    const result = await updateConversationGenealogy();
+    expect(result.graph.nodes['X']).toBeDefined();
+    expect(result.graph.nodes['X'].deletedAt).toBeUndefined();
+    expect(result.graph.nodes['X'].stale).toBe(true);
+  });
 });

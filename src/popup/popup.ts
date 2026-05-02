@@ -156,6 +156,7 @@ async function requestGenealogyStats(): Promise<void> {
       `Nodes: ${stats.nodeCount}\n` +
       `Edges: ${stats.edgeCount}\n` +
       `Stale/unverified: ${stats.staleNodeCount}\n` +
+      `Deleted: ${stats.deletedNodeCount}\n` +
       `Unresolved: ${stats.unresolvedNodeCount}\n` +
       `Last auto scan: ${lastAutoScan}`;
   } catch {
@@ -163,7 +164,8 @@ async function requestGenealogyStats(): Promise<void> {
     statsEl.textContent =
       `Nodes: ${Object.keys(graph.nodes).length}\n` +
       `Edges: ${graph.edges.length}\n` +
-      `Stale/unverified: ${Object.values(graph.nodes).filter((node) => node.stale || node.missing).length}\n` +
+      `Stale/unverified: ${Object.values(graph.nodes).filter((node) => !node.deletedAt && (node.stale || node.missing)).length}\n` +
+      `Deleted: ${Object.values(graph.nodes).filter((node) => !!node.deletedAt).length}\n` +
       `Unresolved: ${Object.values(graph.nodes).filter((node) => node.unresolved).length}\n` +
       'Last auto scan: n/a';
   }

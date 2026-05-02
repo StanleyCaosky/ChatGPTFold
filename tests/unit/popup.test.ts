@@ -8,7 +8,7 @@ const sendMessage = vi.fn(async (_tabId: number, msg: { type: string }) => {
     return { enabled: true, foldedCount: 1, checkedCount: 2, paused: false, pauseReason: null, failSafeLevel: 0, errors: 0 };
   }
   if (msg.type === 'GET_GENEALOGY_STATS') {
-    return { nodeCount: 1, edgeCount: 1, staleNodeCount: 0, unresolvedNodeCount: 0, currentConversationId: 'conv-a', lastAutoScanAt: null };
+    return { nodeCount: 1, edgeCount: 1, staleNodeCount: 0, deletedNodeCount: 0, unresolvedNodeCount: 0, currentConversationId: 'conv-a', lastAutoScanAt: null };
   }
   if (msg.type === 'GET_GENEALOGY_DIAGNOSTICS') {
     return null;
@@ -129,6 +129,7 @@ describe('popup Branch Map UI', () => {
     (document.getElementById('exportMemory') as HTMLButtonElement).click();
     await flushAsyncWork();
     expect(clickSpy).toHaveBeenCalled();
+    expect(document.getElementById('genealogyStats')?.textContent).toContain('Deleted: 0');
   });
 
   it('shows failure message when current tab is not a ChatGPT conversation', async () => {

@@ -298,6 +298,14 @@
   color: var(--longconv-btn-hover-color);
 }
 
+.longconv-branch-marker-highlight {
+  outline: 2px solid rgba(148, 163, 184, 0.95);
+  box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background-color: rgba(148, 163, 184, 0.12);
+  transition: background-color 0.2s ease, outline-color 0.2s ease;
+}
+
 .longconv-branch-record-btn {
   display: block;
   width: calc(100% - 32px);

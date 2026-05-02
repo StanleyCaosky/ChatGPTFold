@@ -208,6 +208,37 @@ describe('genealogy panel rendering', () => {
     expect(map.get('A')?.map((node) => node.conversationId)).toEqual(['B', 'C']);
     expect(map.get('B')?.map((node) => node.conversationId)).toEqual(['D']);
   });
+
+  it('renders deleted node in tree and keeps lineage intact', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'B', 'B', { deletedAt: 123, deleteReason: 'sidebar-explicit-delete' });
+    addNode(graph, 'C', 'C');
+    addEdge(graph, 'A', 'B');
+    addEdge(graph, 'B', 'C');
+
+    const nodes = __TEST__.getHydratedMainTreeNodes(graph, makeCatalog([['A', 'A'], ['C', 'C']]), makeCurrent('C', 'C', true));
+    expect(nodes.map((node) => node.conversationId).sort()).toEqual(['A', 'B', 'C']);
+    expect(nodes.find((node) => node.conversationId === 'B')?.deleted).toBe(true);
+  });
+
+  it('hides deleted dead leaf with no note', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'D', 'D', { deletedAt: 123, deleteReason: 'sidebar-explicit-delete' });
+    addEdge(graph, 'A', 'D');
+    const nodes = __TEST__.getHydratedMainTreeNodes(graph, makeCatalog([['A', 'A']]), makeCurrent('A', 'A', true));
+    expect(nodes).toHaveLength(0);
+  });
+
+  it('keeps deleted node with note in tree', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'D', 'D', { deletedAt: 123, deleteReason: 'sidebar-explicit-delete', note: 'keep me' });
+    addEdge(graph, 'A', 'D');
+    const nodes = __TEST__.getHydratedMainTreeNodes(graph, makeCatalog([['A', 'A']]), makeCurrent('A', 'A', true));
+    expect(nodes.map((node) => node.conversationId).sort()).toEqual(['A', 'D']);
+  });
 });
 
 describe('genealogy panel navigation guard', () => {
@@ -332,6 +363,139 @@ describe('genealogy panel navigation guard', () => {
 
     expect(__TEST__.getNavigationTarget(webNode as any).type).toBe('invalid');
     expect(__TEST__.getNavigationTarget(staleValidNode as any).type).toBe('url');
+  });
+
+  it('treats deleted node as non-navigable tombstone target', () => {
+    const deletedNode = {
+      conversationId: 'B',
+      title: 'B',
+      normalizedTitle: 'b',
+      url: 'https://chatgpt.com/c/B',
+      idSource: 'sidebar-url',
+      aliases: [],
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+      isCurrent: false,
+      unresolved: false,
+      stale: false,
+      missing: false,
+      invalid: false,
+      deleted: true,
+      deletedAt: 123,
+    };
+
+    expect(__TEST__.getNavigationTarget(deletedNode as any).type).toBe('deleted');
+  });
+
+  it('clicking deleted node outside descendant context shows deleted hint', () => {
+    const node = {
+      conversationId: 'B',
+      title: 'B',
+      normalizedTitle: 'b',
+      url: 'https://chatgpt.com/c/B',
+      idSource: 'sidebar-url',
+      aliases: [],
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+      isCurrent: false,
+      unresolved: false,
+      stale: false,
+      missing: false,
+      invalid: false,
+      deleted: true,
+      deletedAt: 123,
+    };
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'B', 'B', { deletedAt: 123, deleteReason: 'sidebar-explicit-delete' });
+    addEdge(graph, 'A', 'B');
+    __TEST__.setLatestGenealogySnapshot(graph, makeDefaultUpdateResult().diagnostics as any, makeCatalog([['A', 'A']]), makeCurrent('X', 'X', true));
+
+    __TEST__.navigateToConversation(node as any);
+    expect(document.body.textContent).toContain('This conversation was deleted and cannot be opened.');
+  });
+
+  it('clicking deleted ancestor in descendant context attempts branch marker scroll', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'B', 'B', { deletedAt: 123, deleteReason: 'sidebar-explicit-delete' });
+    addNode(graph, 'C', 'C', { isCurrent: true, idSource: 'current-url', source: 'current-page' });
+    addEdge(graph, 'A', 'B');
+    addEdge(graph, 'B', 'C');
+    __TEST__.setLatestGenealogySnapshot(graph, makeDefaultUpdateResult().diagnostics as any, makeCatalog([['A', 'A'], ['C', 'C', true]]), makeCurrent('C', 'C', true));
+
+    const marker = document.createElement('div');
+    marker.textContent = '从 B 建立的分支';
+    marker.getBoundingClientRect = () => ({ width: 360, height: 28, top: 120, left: 10, right: 370, bottom: 148, x: 10, y: 120, toJSON: () => ({}) } as DOMRect);
+    const scrollSpy = vi.fn();
+    marker.scrollIntoView = scrollSpy as any;
+    document.body.appendChild(marker);
+
+    const node = __TEST__.hydrateNode('B', { catalog: makeCatalog([['A', 'A'], ['C', 'C', true]]), currentConversation: makeCurrent('C', 'C', true) } as any, graph)!;
+    const result = __TEST__.scrollToBranchMarkerForDeletedAncestor(node as any, makeCurrent('C', 'C', true), graph);
+    expect(result).toBe(true);
+    expect(scrollSpy).toHaveBeenCalled();
+    expect(marker.classList.contains('longconv-branch-marker-highlight')).toBe(true);
+    expect(document.body.classList.contains('longconv-branch-marker-highlight')).toBe(false);
+  });
+
+  it('strict marker finder rejects main/body and huge container, prefers leaf', () => {
+    const main = document.createElement('main');
+    main.textContent = '从 B 建立的分支';
+    document.body.appendChild(main);
+    expect(__TEST__.findStrictBranchMarkerElement(['从 b 建立的分支'])).toBeNull();
+
+    const huge = document.createElement('div');
+    huge.textContent = '从 B 建立的分支';
+    huge.getBoundingClientRect = () => ({ width: 500, height: 240, top: 10, left: 0, right: 500, bottom: 250, x: 0, y: 10, toJSON: () => ({}) } as DOMRect);
+    document.body.appendChild(huge);
+    expect(__TEST__.findStrictBranchMarkerElement(['从 b 建立的分支'])).toBeNull();
+
+    const parent = document.createElement('div');
+    parent.textContent = '从 B 建立的分支 parent';
+    parent.getBoundingClientRect = () => ({ width: 420, height: 40, top: 200, left: 10, right: 430, bottom: 240, x: 10, y: 200, toJSON: () => ({}) } as DOMRect);
+    const child = document.createElement('span');
+    child.textContent = '从 B 建立的分支';
+    child.getBoundingClientRect = () => ({ width: 240, height: 24, top: 208, left: 16, right: 256, bottom: 232, x: 16, y: 208, toJSON: () => ({}) } as DOMRect);
+    parent.appendChild(child);
+    document.body.appendChild(parent);
+    expect(__TEST__.findStrictBranchMarkerElement(['从 b 建立的分支'])).toBe(child);
+  });
+
+  it('clearBranchMarkerHighlight removes highlight class', () => {
+    const el = document.createElement('div');
+    el.textContent = '从 B 建立的分支';
+    document.body.appendChild(el);
+    __TEST__.highlightBranchMarker(el);
+    expect(el.classList.contains('longconv-branch-marker-highlight')).toBe(true);
+    __TEST__.clearBranchMarkerHighlight();
+    expect(el.classList.contains('longconv-branch-marker-highlight')).toBe(false);
+  });
+
+  it('closePanel and cleanup clear marker highlight', () => {
+    const el = document.createElement('div');
+    el.textContent = '从 B 建立的分支';
+    document.body.appendChild(el);
+    __TEST__.highlightBranchMarker(el);
+    __TEST__.closePanel();
+    expect(el.classList.contains('longconv-branch-marker-highlight')).toBe(false);
+
+    __TEST__.highlightBranchMarker(el);
+    __TEST__.cleanupGenealogyUI();
+    expect(el.classList.contains('longconv-branch-marker-highlight')).toBe(false);
+  });
+
+  it('switching conversation snapshot clears marker highlight', () => {
+    const el = document.createElement('div');
+    el.textContent = '从 B 建立的分支';
+    document.body.appendChild(el);
+    __TEST__.highlightBranchMarker(el);
+
+    __TEST__.setLatestGenealogySnapshot(makeGraph(), makeDefaultUpdateResult().diagnostics as any, [], makeCurrent('A', 'A', true));
+    __TEST__.setLatestGenealogySnapshot(makeGraph(), makeDefaultUpdateResult().diagnostics as any, [], makeCurrent('X', 'X', true));
+    expect(el.classList.contains('longconv-branch-marker-highlight')).toBe(false);
   });
 });
 
@@ -694,6 +858,67 @@ describe('genealogy map view layout and interactions', () => {
     addEdge(graph, 'A', 'WEB::abc');
     const context = __TEST__.buildMapViewGraphForFocus(graph, 'A', makeCatalog([['A', 'A', true]]), makeCurrent('A', 'A', true));
     expect(Object.keys(context.graph.nodes)).toEqual(['A']);
+  });
+
+  it('map view keeps deleted nodes in rendered component', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'B', 'B', { deletedAt: 123, deleteReason: 'sidebar-explicit-delete' });
+    addEdge(graph, 'A', 'B');
+    const context = __TEST__.buildMapViewGraphForFocus(graph, 'A', makeCatalog([['A', 'A', true]]), makeCurrent('A', 'A', true));
+    expect(Object.keys(context.graph.nodes).sort()).toEqual(['A']);
+  });
+
+  it('map view hides all-deleted dead branch', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'D', 'D', { deletedAt: 123, deleteReason: 'sidebar-explicit-delete' });
+    addNode(graph, 'E', 'E', { deletedAt: 124, deleteReason: 'sidebar-explicit-delete' });
+    addEdge(graph, 'A', 'D');
+    addEdge(graph, 'D', 'E');
+    const context = __TEST__.buildMapViewGraphForFocus(graph, 'A', makeCatalog([['A', 'A', true]]), makeCurrent('A', 'A', true));
+    expect(Object.keys(context.graph.nodes)).toEqual(['A']);
+  });
+
+  it('map view keeps deleted tombstone with note', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'D', 'D', { deletedAt: 123, deleteReason: 'sidebar-explicit-delete', note: 'important' });
+    addEdge(graph, 'A', 'D');
+    const context = __TEST__.buildMapViewGraphForFocus(graph, 'A', makeCatalog([['A', 'A', true]]), makeCurrent('A', 'A', true));
+    expect(Object.keys(context.graph.nodes).sort()).toEqual(['A', 'D']);
+  });
+
+  it('map layout keeps full active path through deleted parent', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'B', 'B', { deletedAt: 123, deleteReason: 'sidebar-explicit-delete' });
+    addNode(graph, 'C', 'C', { isCurrent: true, idSource: 'current-url', source: 'current-page' });
+    addEdge(graph, 'A', 'B');
+    addEdge(graph, 'B', 'C');
+    const current = makeCurrent('C', 'C', true);
+    const nodes = __TEST__.getHydratedMainTreeNodes(graph, makeCatalog([['A', 'A'], ['C', 'C', true]]), current);
+    const childrenMap = __TEST__.buildChildrenMap(graph, new Set(nodes.map((node) => node.conversationId)), makeCatalog([['A', 'A'], ['C', 'C', true]]), current);
+    const forest = __TEST__.buildVisibleMapForest([nodes.find((node) => node.conversationId === 'A')!], childrenMap, new Set<string>(), current);
+    const layout = __TEST__.computeMapLayout(forest, false, current);
+
+    expect(layout.nodes.map((node) => node.node.conversationId)).toEqual(['A', 'B', 'C']);
+    expect(layout.nodes.find((node) => node.node.conversationId === 'B')?.node.deleted).toBe(true);
+  });
+
+  it('map context shows A as root after deleted-parent lineage repair shape', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'B', 'B', { deletedAt: 123, deleteReason: 'sidebar-explicit-delete', parentConversationId: 'A' });
+    addNode(graph, 'C', 'C', { isCurrent: true, idSource: 'current-url', source: 'current-page' });
+    addEdge(graph, 'B', 'C');
+
+    const current = makeCurrent('C', 'C', true);
+    const nodes = __TEST__.getHydratedMainTreeNodes(graph, makeCatalog([['A', 'A'], ['C', 'C', true]]), current);
+    const childrenMap = __TEST__.buildChildrenMap(graph, new Set(nodes.map((node) => node.conversationId)), makeCatalog([['A', 'A'], ['C', 'C', true]]), current);
+    const retainedGraph = __TEST__.computeRetainedGenealogyGraph(graph, { catalog: makeCatalog([['A', 'A'], ['C', 'C', true]]), currentConversation: current });
+    const roots = nodes.filter((node) => !retainedGraph.edges.some((edge) => edge.toConversationId === node.conversationId));
+    expect(roots.map((node) => node.conversationId)).not.toContain('B');
   });
 
   it('allows collapsing an active ancestor subtree', () => {

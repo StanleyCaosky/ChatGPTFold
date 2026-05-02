@@ -31,6 +31,7 @@ export interface GenealogyStatsResponse {
   nodeCount: number;
   edgeCount: number;
   staleNodeCount: number;
+  deletedNodeCount: number;
   unresolvedNodeCount: number;
   currentConversationId: string;
   lastAutoScanAt: number | null;

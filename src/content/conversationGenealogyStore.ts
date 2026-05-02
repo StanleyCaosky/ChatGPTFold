@@ -17,7 +17,7 @@ import { safeStorageGet, safeStorageRemove, safeStorageSet } from './extensionCo
 export type { ConversationGenealogyGraph };
 
 const STORAGE_KEY = 'longconv_conversation_genealogy';
-export const GENEALOGY_SCHEMA_VERSION = 3;
+export const GENEALOGY_SCHEMA_VERSION = 4;
 export const GENEALOGY_MEMORY_EXPORT_TYPE = 'chatgptfold.genealogy-memory';
 export const GENEALOGY_MEMORY_EXPORT_VERSION = 1;
 
@@ -71,6 +71,11 @@ export interface ReconcileGenealogyMemoryResult {
 export interface CleanGenealogyMemoryResult {
   graph: ConversationGenealogyGraph;
   report: GenealogyMemoryCleanReport;
+}
+
+export interface DeletedLineageRepairResult {
+  repairedEdges: string[];
+  unresolvedDeletedParents: string[];
 }
 
 export function createEmptyGenealogyGraph(): ConversationGenealogyGraph {
@@ -160,6 +165,8 @@ export function exportGenealogyMemory(
       stale: node.stale,
       missing: node.missing,
       invalid: node.invalid,
+      deletedAt: node.deletedAt,
+      deleteReason: node.deleteReason,
       label: node.label,
       note: node.note,
     };
@@ -331,9 +338,11 @@ export function reconcileImportedGenealogyGraph(
         firstSeenAt: Math.min(existing.firstSeenAt, node.firstSeenAt || existing.firstSeenAt),
         lastSeenAt: Math.max(existing.lastSeenAt, node.lastSeenAt || existing.lastSeenAt),
         unresolved: !!existing.unresolved || !!node.unresolved,
-        stale: !!existing.stale || !!node.stale,
-        missing: !!existing.missing || !!node.missing,
-        invalid: !!existing.invalid && !!node.invalid,
+        stale: node.deletedAt ? false : (!!existing.stale || !!node.stale),
+        missing: node.deletedAt ? false : (!!existing.missing || !!node.missing),
+        invalid: node.deletedAt ? false : (!!existing.invalid && !!node.invalid),
+        deletedAt: existing.deletedAt ?? node.deletedAt,
+        deleteReason: existing.deleteReason ?? node.deleteReason,
       });
       if (node.title && node.title !== existing.title) {
         merged.nodes[node.conversationId].aliases = dedupeStrings([...(merged.nodes[node.conversationId].aliases ?? []), node.title]);
@@ -363,9 +372,11 @@ export function reconcileImportedGenealogyGraph(
       firstSeenAt: node.firstSeenAt || Date.now(),
       lastSeenAt: node.lastSeenAt || Date.now(),
       unresolved: !!node.unresolved,
-      stale: !sidebarEntry && !isCurrent && isValidConversationUrl(importedUrl),
-      missing: !sidebarEntry && !isCurrent && isValidConversationUrl(importedUrl),
+      stale: node.deletedAt ? false : (!sidebarEntry && !isCurrent && isValidConversationUrl(importedUrl)),
+      missing: node.deletedAt ? false : (!sidebarEntry && !isCurrent && isValidConversationUrl(importedUrl)),
       invalid: false,
+      deletedAt: node.deletedAt,
+      deleteReason: node.deleteReason,
       label: node.label,
       note: node.note,
     });
@@ -418,6 +429,7 @@ export function reconcileImportedGenealogyGraph(
   }
 
   const cleaned = prepareGraphForMemoryTransfer(merged, context);
+  repairDeletedTombstoneLineage(cleaned, context);
   report.ghostNodesRemoved.push(...cleaned.__memoryCleanupGhosts);
   report.invalidNodesDropped.push(...cleaned.__memoryCleanupDropped);
 
@@ -459,6 +471,7 @@ export function cleanInvalidGhostNodes(graph: ConversationGenealogyGraph, contex
   };
 
   cleanupGenealogyGraph(cloned, context);
+  repairDeletedTombstoneLineage(cloned, context);
 
   for (const node of Object.values(cloned.nodes)) {
     const decision = classifyTransferNode(node, cloned, context, 'clean');
@@ -526,6 +539,46 @@ export async function updateConversationNodeNote(conversationId: string, note: s
   if (trimmed) existing.note = trimmed;
   else delete existing.note;
   await saveGenealogyGraph(graph);
+}
+
+export function isDeletedConversationNode(node: Pick<ConversationNode, 'deletedAt'> | undefined): boolean {
+  return !!node?.deletedAt;
+}
+
+export function markConversationDeleted(
+  graph: ConversationGenealogyGraph,
+  conversationId: string,
+  reason: 'sidebar-explicit-delete' | 'current-conversation-delete' | 'manual-clean',
+  context: HydrationContext = {
+    catalog: [],
+    currentConversation: {
+      valid: false,
+      conversationId: 'unknown',
+      title: 'unknown',
+      url: '',
+      normalizedTitle: 'unknown',
+      idSource: 'unknown',
+    },
+  }
+): boolean {
+  if (!isRealConversationId(conversationId)) return false;
+  const node = graph.nodes[conversationId];
+  if (!node || isDeletedConversationNode(node)) return false;
+
+  node.deletedAt = Date.now();
+  node.deleteReason = reason;
+  node.isCurrent = false;
+  node.stale = false;
+  node.missing = false;
+  node.invalid = false;
+
+  if (graph.currentConversationId === conversationId) {
+    graph.currentConversationId = undefined;
+  }
+
+  repairDeletedTombstoneLineage(graph, context);
+
+  return true;
 }
 
 export function normalizeTitle(title: string): string {
@@ -652,6 +705,8 @@ export function upsertConversationNode(
     if (node.stale !== undefined) existing.stale = node.stale;
     if (node.missing !== undefined) existing.missing = node.missing;
     if (node.invalid !== undefined) existing.invalid = node.invalid;
+    if (node.deletedAt !== undefined) existing.deletedAt = node.deletedAt;
+    if (node.deleteReason !== undefined) existing.deleteReason = node.deleteReason;
     if (node.label) existing.label = node.label;
     if (node.note) existing.note = node.note;
 
@@ -812,6 +867,68 @@ export function resolveParentTitle(
     error: `Parent title "${parentTitle}" not found in current catalog`,
     duplicateCount: 0,
     matchType: 'none',
+  };
+}
+
+export function repairDeletedTombstoneLineage(
+  graph: ConversationGenealogyGraph,
+  context: HydrationContext
+): DeletedLineageRepairResult {
+  const repairedEdges: string[] = [];
+  const unresolvedDeletedParents: string[] = [];
+
+  for (const node of Object.values(graph.nodes)) {
+    if (!isDeletedConversationNode(node)) continue;
+    if (!isRealConversationId(node.conversationId)) continue;
+
+    const hasIncoming = graph.edges.some((edge) => edge.toConversationId === node.conversationId);
+    if (hasIncoming) continue;
+
+    let resolvedParentId = '';
+    if (node.parentConversationId && isRealConversationId(node.parentConversationId)) {
+      const parentNode = graph.nodes[node.parentConversationId];
+      if (parentNode && isRealConversationId(parentNode.conversationId) && !isSyntheticConversationId(parentNode.conversationId) && !parentNode.invalid) {
+        resolvedParentId = node.parentConversationId;
+      }
+    }
+
+    if (!resolvedParentId && node.parentTitleFromMarker) {
+      const resolution = resolveParentTitle(graph, node.parentTitleFromMarker, context.catalog);
+      if (resolution.conversationId && resolution.conversationId !== node.conversationId && isRealConversationId(resolution.conversationId)) {
+        resolvedParentId = resolution.conversationId;
+        node.parentConversationId = resolution.conversationId;
+      }
+    }
+
+    if (!resolvedParentId) {
+      unresolvedDeletedParents.push(node.conversationId);
+      continue;
+    }
+
+    const parentNode = graph.nodes[resolvedParentId];
+    if (!parentNode) {
+      unresolvedDeletedParents.push(node.conversationId);
+      continue;
+    }
+
+    const beforeEdgeCount = graph.edges.length;
+    upsertConversationEdge(graph, {
+      fromConversationId: resolvedParentId,
+      toConversationId: node.conversationId,
+      source: 'native-marker',
+      confidence: 'medium',
+      markerText: node.parentTitleFromMarker,
+      fromTitle: parentNode.title,
+      toTitle: node.title,
+    });
+    const repaired = graph.edges.length !== beforeEdgeCount;
+    if (repaired) repairedEdges.push(`${resolvedParentId}->${node.conversationId}`);
+  }
+
+  dedupeEdges(graph);
+  return {
+    repairedEdges,
+    unresolvedDeletedParents,
   };
 }
 
@@ -1124,11 +1241,14 @@ export function hydrateNode(
     (metadata?.url && isValidConversationUrl(metadata.url) ? normalizeConversationUrl(metadata.url) : '');
   const idSource = isCurrent ? 'current-url' : catalogEntry?.idSource ?? (metadata?.idSource ?? 'unknown');
   const unresolved = !!metadata?.unresolved || conversationId.startsWith('placeholder:');
+  const deleted = isDeletedConversationNode(metadata);
   const verified = isVerifiedConversationNode({ conversationId, url, idSource }, context);
   const missing = false;
   const hasStableIdentity = verified || isValidConversationUrl(url) || isVerifiedIdSource(idSource);
-  const stale = !isCurrent && !catalogEntry && !isSyntheticConversationId(conversationId) && hasStableIdentity;
-  const invalid = unresolved
+  const stale = !deleted && !isCurrent && !catalogEntry && !isSyntheticConversationId(conversationId) && hasStableIdentity;
+  const invalid = deleted
+    ? false
+    : unresolved
     ? false
     : isSyntheticConversationId(conversationId) || (!verified && !isValidConversationUrl(url));
 
@@ -1149,6 +1269,8 @@ export function hydrateNode(
     stale,
     missing,
     invalid: invalid || !!metadata?.invalid,
+    deleted,
+    deletedAt: metadata?.deletedAt,
     label: metadata?.label,
     note: metadata?.note,
   };
@@ -1159,6 +1281,12 @@ export function canRenderHydratedNode(
   graph: ConversationGenealogyGraph,
   context: HydrationContext
 ): boolean {
+  if (node.deleted) {
+    if (!isRealConversationId(node.conversationId)) return false;
+    if (node.unresolved || node.invalid) return false;
+    if (isAutoBranchGhostNode(node, graph, context)) return false;
+    return true;
+  }
   if (isSyntheticConversationId(node.conversationId) && !node.unresolved) return false;
   if (isAutoBranchGhostNode(node, graph, context)) return false;
   if (node.unresolved) return true;
@@ -1181,6 +1309,171 @@ export function getRenderableNodeIds(
     const node = hydrateNode(id, context, graph);
     return !!node && canRenderHydratedNode(node, graph, context);
   });
+}
+
+export function computeRetainedGenealogyGraph(
+  graph: ConversationGenealogyGraph,
+  context: HydrationContext
+): ConversationGenealogyGraph {
+  const sanitized = sanitizeCurrentGraph(graph);
+  repairDeletedTombstoneLineage(sanitized, context);
+
+  const nodeById = sanitized.nodes;
+  const outgoing = new Map<string, string[]>();
+  const incoming = new Map<string, string[]>();
+  for (const edge of sanitized.edges) {
+    if (!outgoing.has(edge.fromConversationId)) outgoing.set(edge.fromConversationId, []);
+    if (!incoming.has(edge.toConversationId)) incoming.set(edge.toConversationId, []);
+    outgoing.get(edge.fromConversationId)!.push(edge.toConversationId);
+    incoming.get(edge.toConversationId)!.push(edge.fromConversationId);
+  }
+
+  const isBaseEligible = (id: string): boolean => {
+    const node = nodeById[id];
+    if (!node) return false;
+    const hydrated = hydrateNode(id, context, sanitized);
+    if (!hydrated) return false;
+    if (hydrated.unresolved) return false;
+    if (!canRenderHydratedNode(hydrated, sanitized, context)) return false;
+    return true;
+  };
+
+  const liveAnchorIds = new Set<string>();
+  const anchorIds = new Set<string>();
+  for (const id of Object.keys(nodeById)) {
+    if (!isBaseEligible(id)) continue;
+    const node = nodeById[id];
+    const deleted = isDeletedConversationNode(node);
+    const hasValue = !!node.note || !!node.label;
+    if (!deleted) {
+      liveAnchorIds.add(id);
+      anchorIds.add(id);
+      continue;
+    }
+    if (hasValue) anchorIds.add(id);
+  }
+
+  if (context.currentConversation.valid && nodeById[context.currentConversation.conversationId] && isBaseEligible(context.currentConversation.conversationId)) {
+    anchorIds.add(context.currentConversation.conversationId);
+  }
+
+  const hasLiveOrValuedDescendant = (startId: string): boolean => {
+    const queue = [...(outgoing.get(startId) ?? [])];
+    const seen = new Set<string>();
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      const node = nodeById[current];
+      if (!node || !isBaseEligible(current)) continue;
+      const deleted = isDeletedConversationNode(node);
+      if (!deleted || node.note || node.label) return true;
+      queue.push(...(outgoing.get(current) ?? []));
+    }
+    return false;
+  };
+
+  for (const id of Object.keys(nodeById)) {
+    const node = nodeById[id];
+    if (!node || !isDeletedConversationNode(node)) continue;
+    if (!isBaseEligible(id)) continue;
+    if (node.note || node.label) {
+      anchorIds.add(id);
+      continue;
+    }
+    if (hasLiveOrValuedDescendant(id)) {
+      anchorIds.add(id);
+    }
+  }
+
+  const retainedIds = new Set<string>();
+  const reverseQueue = [...anchorIds];
+  while (reverseQueue.length > 0) {
+    const current = reverseQueue.shift()!;
+    if (retainedIds.has(current)) continue;
+    retainedIds.add(current);
+    for (const parentId of incoming.get(current) ?? []) {
+      if (isBaseEligible(parentId) && !retainedIds.has(parentId)) reverseQueue.push(parentId);
+    }
+  }
+
+  for (const id of liveAnchorIds) {
+    retainedIds.add(id);
+  }
+
+  const retained: ConversationGenealogyGraph = {
+    schemaVersion: sanitized.schemaVersion,
+    nodes: {},
+    edges: [],
+    currentConversationId: sanitized.currentConversationId,
+    updatedAt: sanitized.updatedAt,
+  };
+
+  for (const id of retainedIds) {
+    if (!nodeById[id]) continue;
+    retained.nodes[id] = { ...nodeById[id] };
+  }
+
+  retained.edges = sanitized.edges.filter(
+    (edge) => retainedIds.has(edge.fromConversationId) && retainedIds.has(edge.toConversationId)
+  );
+  dedupeEdges(retained);
+  return retained;
+}
+
+export function isDescendantOf(
+  graph: ConversationGenealogyGraph,
+  descendantId: string,
+  ancestorId: string
+): boolean {
+  if (!descendantId || !ancestorId) return false;
+  if (descendantId === ancestorId) return true;
+
+  const queue = [ancestorId];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    const children = graph.edges
+      .filter((edge) => edge.fromConversationId === current)
+      .map((edge) => edge.toConversationId);
+    for (const child of children) {
+      if (child === descendantId) return true;
+      if (!seen.has(child)) queue.push(child);
+    }
+  }
+
+  return false;
+}
+
+export function findConversationPath(
+  graph: ConversationGenealogyGraph,
+  fromConversationId: string,
+  toConversationId: string
+): string[] | null {
+  if (!fromConversationId || !toConversationId) return null;
+  if (fromConversationId === toConversationId) return [fromConversationId];
+
+  const queue: Array<{ id: string; path: string[] }> = [{ id: fromConversationId, path: [fromConversationId] }];
+  const seen = new Set<string>();
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (seen.has(current.id)) continue;
+    seen.add(current.id);
+
+    const children = graph.edges
+      .filter((edge) => edge.fromConversationId === current.id)
+      .map((edge) => edge.toConversationId);
+    for (const child of children) {
+      const nextPath = [...current.path, child];
+      if (child === toConversationId) return nextPath;
+      if (!seen.has(child)) queue.push({ id: child, path: nextPath });
+    }
+  }
+
+  return null;
 }
 
 function convertMemoryExportToGraph(exportData: GenealogyMemoryExport): ConversationGenealogyGraph {
@@ -1229,6 +1522,7 @@ function prepareGraphForMemoryTransfer(graph: ConversationGenealogyGraph, contex
 
   const beforeDedupe = clone.edges.length;
   const cleanup = cleanupGenealogyGraph(clone, context);
+  repairDeletedTombstoneLineage(clone, context);
   dedupeEdges(clone);
   clone.__memoryDuplicateEdgesRemoved += beforeDedupe - clone.edges.length;
   clone.__memoryCleanupGhosts.push(...cleanup.autoBranchGhostRemoved, ...cleanup.autoBranchGhostDetected);
@@ -1270,7 +1564,17 @@ function prepareGraphForMemoryTransfer(graph: ConversationGenealogyGraph, contex
   });
   clone.__memoryDuplicateEdgesRemoved += Math.max(0, beforeEndpointPrune - clone.edges.length);
   dedupeEdges(clone);
-  return clone;
+  const retained = computeRetainedGenealogyGraph(clone, context) as ConversationGenealogyGraph & {
+    __memoryCleanupGhosts: string[];
+    __memoryCleanupDropped: string[];
+    __memoryDuplicateEdgesRemoved: number;
+    __memoryDroppedEdges: string[];
+  };
+  retained.__memoryCleanupGhosts = clone.__memoryCleanupGhosts;
+  retained.__memoryCleanupDropped = clone.__memoryCleanupDropped;
+  retained.__memoryDuplicateEdgesRemoved = clone.__memoryDuplicateEdgesRemoved;
+  retained.__memoryDroppedEdges = clone.__memoryDroppedEdges;
+  return retained;
 }
 
 function classifyTransferNode(
@@ -1291,6 +1595,7 @@ function classifyTransferNode(
   const homepageLike = !!node.url && !isValidConversationUrl(node.url);
 
   if (mode === 'export' && node.source === 'sidebar' && !hasEdge && !hasValue) return { kind: 'drop', reason: 'no-value' };
+  if (isDeletedConversationNode(node) && isRealConversationId(node.conversationId)) return { kind: 'keep' };
   if (isProtectedConversationNode(node, graph, context)) return { kind: 'keep' };
 
   if (autoGhost) return { kind: 'drop', reason: 'ghost' };
@@ -1309,6 +1614,7 @@ function canKeepTransferNode(
   context: HydrationContext,
   mode: 'import' | 'export' | 'clean'
 ): boolean {
+  if (isDeletedConversationNode(node) && isRealConversationId(node.conversationId)) return true;
   if (isProtectedConversationNode(node, graph, context)) return true;
   const hasIncoming = graph.edges.some((edge) => edge.toConversationId === node.conversationId);
   const hasOutgoing = graph.edges.some((edge) => edge.fromConversationId === node.conversationId);
@@ -1339,6 +1645,7 @@ function getProtectedNodeReasons(
   const validUrl = isValidConversationUrl(node.url);
   const verifiedId = isVerifiedIdSource(node.idSource);
   const isCurrent = context.currentConversation.valid && context.currentConversation.conversationId === node.conversationId;
+  const deleted = isDeletedConversationNode(node);
 
   if (validUrl) reasons.push('valid /c/<id> URL');
   if (verifiedId) reasons.push('verified idSource');
@@ -1346,8 +1653,9 @@ function getProtectedNodeReasons(
   if (node.note) reasons.push('has note');
   if (node.label) reasons.push('has label');
   if (hasAlias) reasons.push('has alias');
+  if (deleted && isRealConversationId(node.conversationId)) reasons.push('deleted tombstone');
   if (isCurrent || node.isCurrent) reasons.push('current conversation');
-  if (hydrated && (hydrated.stale || hydrated.missing) && (validUrl || verifiedId)) reasons.push('stale but valid');
+  if (!deleted && hydrated && (hydrated.stale || hydrated.missing) && (validUrl || verifiedId)) reasons.push('stale but valid');
   if ((node.unresolved || node.conversationId.startsWith('placeholder:')) && hasOutgoing) reasons.push('unresolved parent with outgoing edge');
   if (sidebarVerified) reasons.push('sidebar verified');
   return dedupeStrings(reasons);
@@ -1452,9 +1760,11 @@ function migrateLegacyGraph(raw: LegacyGraphShape): {
     graph.nodes[id] = {
       ...node,
       source: hasEdge ? 'metadata' : node.source,
-      stale: verified && !validUrl ? true : node.stale,
-      missing: verified && !validUrl ? true : node.missing,
-    };
+        stale: verified && !validUrl ? true : node.stale,
+        missing: verified && !validUrl ? true : node.missing,
+        deletedAt: node.deletedAt,
+        deleteReason: node.deleteReason,
+      };
   }
 
   const validNodeIds = new Set(Object.keys(graph.nodes));
@@ -1501,6 +1811,8 @@ function sanitizeNode(rawNode: Partial<ConversationNode>, fallbackId: string): C
     stale: !!rawNode.stale,
     missing: !!rawNode.missing,
     invalid: !!rawNode.invalid,
+    deletedAt: typeof rawNode.deletedAt === 'number' && rawNode.deletedAt > 0 ? rawNode.deletedAt : undefined,
+    deleteReason: rawNode.deleteReason,
     label: rawNode.label,
     note: rawNode.note,
   };
@@ -1556,6 +1868,8 @@ function hydratePersistedNode(node: ConversationNode | undefined): HydratedConve
     stale: !!node.stale,
     missing: !!node.missing,
     invalid: !!node.invalid,
+    deleted: !!node.deletedAt,
+    deletedAt: node.deletedAt,
     label: node.label,
     note: node.note,
   };

@@ -10,12 +10,14 @@ import {
   cleanupGenealogyGraph,
   createEmptyGenealogyGraph,
   hydrateNode,
+  isDeletedConversationNode,
   isRealConversationId,
   isValidConversationUrl,
   loadGenealogyGraph,
   makePlaceholderId,
   normalizeTitle,
   resolveParentTitle,
+  repairDeletedTombstoneLineage,
   resolvePlaceholders,
   saveGenealogyGraph,
   upsertConversationEdge,
@@ -228,9 +230,11 @@ export async function updateConversationGenealogy(): Promise<GenealogyUpdateResu
 
   for (const node of Object.values(graph.nodes)) {
     node.isCurrent = false;
-    if (node.idSource === 'sidebar-url') {
-      node.missing = true;
-      node.stale = true;
+    if (!isDeletedConversationNode(node)) {
+      node.missing = false;
+      if (node.idSource === 'sidebar-url') {
+        node.stale = true;
+      }
     }
   }
 
@@ -254,6 +258,8 @@ export async function updateConversationGenealogy(): Promise<GenealogyUpdateResu
       stale: false,
       missing: false,
       invalid: false,
+      deletedAt: existing?.deletedAt,
+      deleteReason: existing?.deleteReason,
     });
 
     const merged = resolvePlaceholders(graph, entry.conversationId, entry.title);
@@ -285,6 +291,8 @@ export async function updateConversationGenealogy(): Promise<GenealogyUpdateResu
       stale: false,
       missing: false,
       invalid: false,
+      deletedAt: previousNode?.deletedAt,
+      deleteReason: previousNode?.deleteReason,
     });
   } else {
     graph.currentConversationId = undefined;
@@ -366,6 +374,22 @@ export async function updateConversationGenealogy(): Promise<GenealogyUpdateResu
     currentConversation,
   });
 
+  const deletedLineageRepair = repairDeletedTombstoneLineage(graph, {
+    catalog: sidebarCatalog,
+    currentConversation,
+  });
+
+  const deletedLineageDiagnostics = buildDeletedLineageDiagnostics(graph, sidebarCatalog);
+  for (const line of deletedLineageDiagnostics) {
+    errors.push(`[deleted-lineage] ${line}`);
+  }
+  if (deletedLineageRepair.repairedEdges.length > 0) {
+    errors.push(`[deleted-lineage] repaired edges: ${deletedLineageRepair.repairedEdges.join(', ')}`);
+  }
+  if (deletedLineageRepair.unresolvedDeletedParents.length > 0) {
+    errors.push(`[deleted-lineage] unresolved deleted parents: ${deletedLineageRepair.unresolvedDeletedParents.join(', ')}`);
+  }
+
   const graphAfter = serializeGraphForComparison(graph);
   const graphChanged = graphBefore !== graphAfter;
   if (graphChanged) {
@@ -432,6 +456,53 @@ export async function updateConversationGenealogy(): Promise<GenealogyUpdateResu
     currentConversation,
     graphChanged,
   };
+}
+
+function buildDeletedLineageDiagnostics(
+  graph: ConversationGenealogyGraph,
+  sidebarCatalog: SidebarCatalogEntry[]
+): string[] {
+  const lines: string[] = [];
+  for (const node of Object.values(graph.nodes)) {
+    if (!isDeletedConversationNode(node) || !isRealConversationId(node.conversationId)) continue;
+    const incomingEdges = graph.edges
+      .filter((edge) => edge.toConversationId === node.conversationId)
+      .map((edge) => `${edge.fromConversationId}->${edge.toConversationId}`);
+    const outgoingEdges = graph.edges
+      .filter((edge) => edge.fromConversationId === node.conversationId)
+      .map((edge) => `${edge.fromConversationId}->${edge.toConversationId}`);
+    const hasParentNode = !!(node.parentConversationId && graph.nodes[node.parentConversationId]);
+    const resolution = node.parentTitleFromMarker
+      ? resolveParentTitle(graph, node.parentTitleFromMarker, sidebarCatalog)
+      : { conversationId: null, duplicateCount: 0, matchType: 'none' as const };
+    const canResolveParentFromTitle = !!resolution.conversationId;
+    const repairAction = incomingEdges.length > 0
+      ? 'already-linked'
+      : node.parentConversationId
+        ? hasParentNode
+          ? 'repair-by-parent-id'
+          : 'unresolved-parent-id'
+        : canResolveParentFromTitle
+          ? 'repair-by-parent-title'
+          : 'unresolved';
+    lines.push(
+      JSON.stringify({
+        conversationId: node.conversationId,
+        title: node.title,
+        deletedAt: node.deletedAt,
+        parentConversationId: node.parentConversationId,
+        parentTitleFromMarker: node.parentTitleFromMarker,
+        aliases: node.aliases ?? [],
+        incomingEdges,
+        outgoingEdges,
+        hasParentNode,
+        canResolveParentFromTitle,
+        resolvedParentId: resolution.conversationId,
+        repairAction,
+      })
+    );
+  }
+  return lines;
 }
 
 export function getRenderableNodes(

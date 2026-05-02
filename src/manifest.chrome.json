@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Long Conversation Stabilizer",
-  "version": "1.2.2",
+  "version": "1.2.4",
   "description": "优化 ChatGPT 长对话性能，自动折叠长消息",
   "permissions": ["storage"],
   "host_permissions": [
@@ -41,3 +41,4 @@
     "128": "icons/icon128.png"
   }
 }
+

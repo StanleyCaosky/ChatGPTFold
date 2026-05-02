@@ -5,9 +5,12 @@ import {
   createEmptyGenealogyGraph,
   exportGenealogyMemory,
   extractAutoBranchBaseTitle,
+  findConversationPath,
+  computeRetainedGenealogyGraph,
   GENEALOGY_SCHEMA_VERSION,
   GENEALOGY_MEMORY_EXPORT_TYPE,
   hydrateNode,
+  isDescendantOf,
   isAutoBranchGhostNode,
   isAutoBranchTitle,
   isRealConversationId,
@@ -26,6 +29,8 @@ import {
   cleanInvalidGhostNodes,
   saveGenealogyGraph,
   isProtectedConversationNode,
+  markConversationDeleted,
+  repairDeletedTombstoneLineage,
   updateConversationNodeNote,
   upsertConversationEdge,
   upsertConversationNode,
@@ -521,6 +526,243 @@ describe('storage', () => {
   });
 });
 
+describe('soft deletion', () => {
+  it('marks node deleted and keeps related edges intact', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'B', 'B');
+    addVerifiedNode(graph, 'C', 'C');
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'B', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(graph, { fromConversationId: 'B', toConversationId: 'C', source: 'native-marker', confidence: 'high' });
+
+    expect(markConversationDeleted(graph, 'B', 'sidebar-explicit-delete')).toBe(true);
+    expect(graph.nodes['B'].deletedAt).toBeTypeOf('number');
+    expect(graph.nodes['C'].deletedAt).toBeUndefined();
+    expect(graph.nodes['B'].invalid).toBe(false);
+    expect(graph.nodes['B'].stale).toBe(false);
+    expect(graph.nodes['B'].missing).toBe(false);
+    expect(graph.edges).toHaveLength(2);
+    expect(isDescendantOf(graph, 'C', 'B')).toBe(true);
+    expect(findConversationPath(graph, 'A', 'C')).toEqual(['A', 'B', 'C']);
+  });
+
+  it('deleted tombstone parentConversationId repairs missing incoming edge', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'B', 'B');
+    addVerifiedNode(graph, 'C', 'C');
+    graph.nodes['B'].deletedAt = 123;
+    graph.nodes['B'].parentConversationId = 'A';
+    upsertConversationEdge(graph, { fromConversationId: 'B', toConversationId: 'C', source: 'native-marker', confidence: 'high' });
+
+    const result = repairDeletedTombstoneLineage(graph, makeContext([sidebarEntry('A', 'A')]));
+    expect(result.repairedEdges).toContain('A->B');
+    expect(graph.edges.map((edge) => `${edge.fromConversationId}->${edge.toConversationId}`)).toEqual(expect.arrayContaining(['A->B', 'B->C']));
+  });
+
+  it('deleted tombstone parentTitleFromMarker repairs missing incoming edge', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', '对话分支测试');
+    addVerifiedNode(graph, 'B', 'B');
+    addVerifiedNode(graph, 'C', 'C');
+    graph.nodes['B'].deletedAt = 123;
+    graph.nodes['B'].parentTitleFromMarker = '对话分支测试';
+    upsertConversationEdge(graph, { fromConversationId: 'B', toConversationId: 'C', source: 'native-marker', confidence: 'high' });
+
+    const result = repairDeletedTombstoneLineage(graph, makeContext([sidebarEntry('A', '对话分支测试')]));
+    expect(result.repairedEdges).toContain('A->B');
+    expect(graph.nodes['B'].parentConversationId).toBe('A');
+  });
+
+  it('duplicate parent title does not repair deleted incoming edge', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A1', 'Same Parent');
+    addVerifiedNode(graph, 'A2', 'Same Parent');
+    addVerifiedNode(graph, 'B', 'B');
+    graph.nodes['B'].deletedAt = 123;
+    graph.nodes['B'].parentTitleFromMarker = 'Same Parent';
+
+    const result = repairDeletedTombstoneLineage(graph, makeContext([sidebarEntry('A1', 'Same Parent'), sidebarEntry('A2', 'Same Parent')]));
+    expect(result.repairedEdges).toHaveLength(0);
+    expect(result.unresolvedDeletedParents).toContain('B');
+    expect(graph.edges.some((edge) => edge.toConversationId === 'B')).toBe(false);
+  });
+
+  it('deleted lineage repair is idempotent', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'B', 'B');
+    graph.nodes['B'].deletedAt = 123;
+    graph.nodes['B'].parentConversationId = 'A';
+
+    repairDeletedTombstoneLineage(graph, makeContext());
+    repairDeletedTombstoneLineage(graph, makeContext());
+    expect(graph.edges.filter((edge) => edge.fromConversationId === 'A' && edge.toConversationId === 'B')).toHaveLength(1);
+  });
+
+  it('uses conversationId not title and ignores synthetic ids', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'id-1', 'Same');
+    addVerifiedNode(graph, 'id-2', 'Same');
+    graph.nodes['WEB::ghost'] = {
+      conversationId: 'WEB::ghost',
+      idSource: 'synthetic',
+      title: 'Same',
+      url: '',
+      normalizedTitle: 'same',
+      source: 'metadata',
+      firstSeenAt: 1,
+      lastSeenAt: 1,
+    };
+
+    expect(markConversationDeleted(graph, 'id-1', 'sidebar-explicit-delete')).toBe(true);
+    expect(graph.nodes['id-1'].deletedAt).toBeTypeOf('number');
+    expect(graph.nodes['id-2'].deletedAt).toBeUndefined();
+    expect(markConversationDeleted(graph, 'WEB::ghost', 'sidebar-explicit-delete')).toBe(false);
+    expect(graph.nodes['WEB::ghost'].deletedAt).toBeUndefined();
+  });
+
+  it('deleted real node remains renderable and is preserved in export', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'B', 'B');
+    addVerifiedNode(graph, 'C', 'C');
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'B', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(graph, { fromConversationId: 'B', toConversationId: 'C', source: 'native-marker', confidence: 'high' });
+    markConversationDeleted(graph, 'B', 'sidebar-explicit-delete');
+
+    const hydrated = hydrateNode('B', makeContext(), graph)!;
+    expect(hydrated.deleted).toBe(true);
+    expect(hydrated.invalid).toBe(false);
+    expect(canRenderHydratedNode(hydrated, graph, makeContext())).toBe(true);
+
+    const exported = exportGenealogyMemory(graph, makeContext([sidebarEntry('A', 'A'), sidebarEntry('C', 'C')]));
+    expect(exported.graph.nodes['B']).toBeDefined();
+    expect(exported.graph.nodes['B'].deletedAt).toBeTypeOf('number');
+    expect(exported.graph.edges.map((edge) => `${edge.fromConversationId}->${edge.toConversationId}`)).toEqual(['A->B', 'B->C']);
+  });
+});
+
+describe('retained genealogy graph', () => {
+  it('keeps deleted parent with live child', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'B', 'B');
+    addVerifiedNode(graph, 'C', 'C');
+    graph.nodes['B'].deletedAt = 123;
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'B', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(graph, { fromConversationId: 'B', toConversationId: 'C', source: 'native-marker', confidence: 'high' });
+
+    const retained = computeRetainedGenealogyGraph(graph, makeContext([sidebarEntry('A', 'A'), sidebarEntry('C', 'C')]));
+    expect(Object.keys(retained.nodes).sort()).toEqual(['A', 'B', 'C']);
+    expect(retained.edges.map((edge) => `${edge.fromConversationId}->${edge.toConversationId}`)).toEqual(['A->B', 'B->C']);
+  });
+
+  it('prunes deleted leaf with no note or label', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'B', 'B');
+    graph.nodes['B'].deletedAt = 123;
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'B', source: 'native-marker', confidence: 'high' });
+
+    const retained = computeRetainedGenealogyGraph(graph, makeContext([sidebarEntry('A', 'A')]));
+    expect(Object.keys(retained.nodes)).toEqual(['A']);
+    expect(retained.edges).toEqual([]);
+  });
+
+  it('prunes all-deleted subtree with no note or label', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'D', 'D');
+    addVerifiedNode(graph, 'E', 'E');
+    graph.nodes['D'].deletedAt = 123;
+    graph.nodes['E'].deletedAt = 124;
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'D', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(graph, { fromConversationId: 'D', toConversationId: 'E', source: 'native-marker', confidence: 'high' });
+
+    const retained = computeRetainedGenealogyGraph(graph, makeContext([sidebarEntry('A', 'A')]));
+    expect(Object.keys(retained.nodes)).toEqual(['A']);
+    expect(retained.edges).toEqual([]);
+  });
+
+  it('keeps deleted node with note', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'D', 'D');
+    graph.nodes['D'].deletedAt = 123;
+    graph.nodes['D'].note = 'keep';
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'D', source: 'native-marker', confidence: 'high' });
+
+    const retained = computeRetainedGenealogyGraph(graph, makeContext([sidebarEntry('A', 'A')]));
+    expect(Object.keys(retained.nodes).sort()).toEqual(['A', 'D']);
+  });
+
+  it('keeps deleted chain leading to live descendant', () => {
+    const graph = createEmptyGenealogyGraph();
+    for (const id of ['A', 'B', 'C', 'D']) addVerifiedNode(graph, id, id);
+    graph.nodes['B'].deletedAt = 123;
+    graph.nodes['C'].deletedAt = 124;
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'B', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(graph, { fromConversationId: 'B', toConversationId: 'C', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(graph, { fromConversationId: 'C', toConversationId: 'D', source: 'native-marker', confidence: 'high' });
+
+    const retained = computeRetainedGenealogyGraph(graph, makeContext([sidebarEntry('A', 'A'), sidebarEntry('D', 'D')]));
+    expect(Object.keys(retained.nodes).sort()).toEqual(['A', 'B', 'C', 'D']);
+  });
+
+  it('retains stale live node and active node, excludes synthetic', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'stale', 'Stale');
+    graph.nodes['stale'].stale = true;
+    graph.nodes['stale'].missing = true;
+    graph.nodes['current'] = {
+      conversationId: 'current',
+      idSource: 'current-url',
+      title: 'Current',
+      url: 'https://chatgpt.com/c/current',
+      normalizedTitle: 'current',
+      source: 'current-page',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+      isCurrent: true,
+    };
+    graph.nodes['WEB::ghost'] = {
+      conversationId: 'WEB::ghost',
+      idSource: 'synthetic',
+      title: 'Ghost',
+      url: '',
+      normalizedTitle: 'ghost',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    upsertConversationEdge(graph, { fromConversationId: 'stale', toConversationId: 'WEB::ghost', source: 'native-marker', confidence: 'high' });
+
+    const retained = computeRetainedGenealogyGraph(graph, makeContext([], {
+      valid: true,
+      conversationId: 'current',
+      title: 'Current',
+      url: 'https://chatgpt.com/c/current',
+      normalizedTitle: 'current',
+      idSource: 'current-url',
+    }));
+    expect(retained.nodes['stale']).toBeDefined();
+    expect(retained.nodes['current']).toBeDefined();
+    expect(retained.nodes['WEB::ghost']).toBeUndefined();
+  });
+
+  it('retained graph is idempotent', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'B', 'B');
+    graph.nodes['B'].deletedAt = 123;
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'B', source: 'native-marker', confidence: 'high' });
+    const once = computeRetainedGenealogyGraph(graph, makeContext([sidebarEntry('A', 'A')]));
+    const twice = computeRetainedGenealogyGraph(once, makeContext([sidebarEntry('A', 'A')]));
+    expect(twice).toEqual(once);
+  });
+});
+
 describe('genealogy memory export', () => {
   it('excludes sidebar-only nodes and auto branch ghosts while preserving metadata', () => {
     const graph = createEmptyGenealogyGraph();
@@ -618,7 +860,7 @@ describe('genealogy memory export', () => {
     expect(exported.ui?.showNotePreviews).toBe(true);
   });
 
-  it('retains unresolved placeholder only when it has outgoing edge', () => {
+  it('drops unresolved placeholder nodes from retained export graph', () => {
     const graph = createEmptyGenealogyGraph();
     const keepId = makePlaceholderId('keep');
     const dropId = makePlaceholderId('drop');
@@ -662,8 +904,53 @@ describe('genealogy memory export', () => {
     });
 
     const exported = exportGenealogyMemory(graph, makeContext());
-    expect(exported.graph.nodes[keepId]).toBeDefined();
+    expect(exported.graph.nodes[keepId]).toBeUndefined();
     expect(exported.graph.nodes[dropId]).toBeUndefined();
+  });
+
+  it('includes deleted tombstone nodes and edges in export', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'B', 'B');
+    addVerifiedNode(graph, 'C', 'C');
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'B', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(graph, { fromConversationId: 'B', toConversationId: 'C', source: 'native-marker', confidence: 'high' });
+    markConversationDeleted(graph, 'B', 'sidebar-explicit-delete');
+
+    const exported = exportGenealogyMemory(graph, makeContext([sidebarEntry('A', 'A'), sidebarEntry('C', 'C')]));
+    expect(Object.keys(exported.graph.nodes).sort()).toEqual(['A', 'B', 'C']);
+    expect(exported.graph.nodes['B'].deleteReason).toBe('sidebar-explicit-delete');
+    expect(exported.graph.edges).toHaveLength(2);
+  });
+
+  it('export excludes redundant deleted dead branches', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'D', 'D');
+    addVerifiedNode(graph, 'E', 'E');
+    graph.nodes['D'].deletedAt = 123;
+    graph.nodes['E'].deletedAt = 124;
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'D', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(graph, { fromConversationId: 'D', toConversationId: 'E', source: 'native-marker', confidence: 'high' });
+
+    const exported = exportGenealogyMemory(graph, makeContext([sidebarEntry('A', 'A')]));
+    expect(Object.keys(exported.graph.nodes)).toEqual(['A']);
+    expect(exported.graph.edges).toEqual([]);
+  });
+
+  it('export keeps deleted tombstone note and label', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'D', 'D');
+    graph.nodes['D'].deletedAt = 123;
+    graph.nodes['D'].note = 'note';
+    graph.nodes['D'].label = 'label';
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'D', source: 'native-marker', confidence: 'high' });
+
+    const exported = exportGenealogyMemory(graph, makeContext([sidebarEntry('A', 'A')]));
+    expect(exported.graph.nodes['D']).toBeDefined();
+    expect(exported.graph.nodes['D'].note).toBe('note');
+    expect(exported.graph.nodes['D'].label).toBe('label');
   });
 });
 
@@ -757,6 +1044,55 @@ describe('genealogy memory reconcile and cleaning', () => {
     expect(result.graph.nodes['A'].note).toBe('local note');
     expect(result.graph.nodes['A'].label).toBe('local label');
     expect(result.report.noteConflictCount).toBe(1);
+  });
+
+  it('import preserves deleted tombstone metadata and edges', () => {
+    const importedGraph = createEmptyGenealogyGraph();
+    importedGraph.nodes['A'] = {
+      conversationId: 'A',
+      idSource: 'sidebar-url',
+      title: 'A',
+      url: 'https://chatgpt.com/c/A',
+      normalizedTitle: 'a',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    importedGraph.nodes['B'] = {
+      conversationId: 'B',
+      idSource: 'sidebar-url',
+      title: 'B',
+      url: 'https://chatgpt.com/c/B',
+      normalizedTitle: 'b',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+      deletedAt: 123,
+      deleteReason: 'sidebar-explicit-delete',
+      note: 'keep note',
+      label: 'keep label',
+      aliases: ['Old B'],
+    };
+    importedGraph.nodes['C'] = {
+      conversationId: 'C',
+      idSource: 'sidebar-url',
+      title: 'C',
+      url: 'https://chatgpt.com/c/C',
+      normalizedTitle: 'c',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    upsertConversationEdge(importedGraph, { fromConversationId: 'A', toConversationId: 'B', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(importedGraph, { fromConversationId: 'B', toConversationId: 'C', source: 'native-marker', confidence: 'high' });
+
+    const result = reconcileImportedGenealogyGraph(importedGraph, createEmptyGenealogyGraph(), makeContext());
+    expect(result.graph.nodes['B'].deletedAt).toBe(123);
+    expect(result.graph.nodes['B'].deleteReason).toBe('sidebar-explicit-delete');
+    expect(result.graph.nodes['B'].note).toBe('keep note');
+    expect(result.graph.nodes['B'].label).toBe('keep label');
+    expect(result.graph.nodes['B'].aliases).toContain('Old B');
+    expect(result.graph.edges.map((edge) => `${edge.fromConversationId}->${edge.toConversationId}`)).toEqual(['A->B', 'B->C']);
   });
 
   it('dedupes edges, removes auto branch ghosts, retains stale valid nodes, drops invalid nodes and bad edges', () => {
@@ -906,6 +1242,24 @@ describe('genealogy memory reconcile and cleaning', () => {
     expect(result.graph.nodes['stale']).toBeDefined();
     expect(result.report.removedNodeIds).toContain('WEB::ghost');
     expect(result.report.willRemove.some((entry) => entry.title === 'Stale')).toBe(false);
+  });
+
+  it('clean invalid ghosts does not remove deleted tombstone with lineage', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    addVerifiedNode(graph, 'B', 'B');
+    addVerifiedNode(graph, 'C', 'C');
+    graph.nodes['B'].deletedAt = 123;
+    graph.nodes['B'].deleteReason = 'sidebar-explicit-delete';
+    graph.nodes['B'].note = 'keep tombstone';
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'B', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(graph, { fromConversationId: 'B', toConversationId: 'C', source: 'native-marker', confidence: 'high' });
+
+    const result = cleanInvalidGhostNodes(graph, makeContext());
+    expect(result.graph.nodes['B']).toBeDefined();
+    expect(result.graph.edges.map((edge) => `${edge.fromConversationId}->${edge.toConversationId}`)).toEqual(['A->B', 'B->C']);
+    expect(result.report.removedNodeIds).not.toContain('B');
+    expect(result.report.willRemove.some((entry) => entry.title === 'B')).toBe(false);
   });
 
   it('does not drop valid url nodes, edge nodes, note nodes, or unresolved parent with outgoing edge', () => {

@@ -25,6 +25,8 @@ export interface ConversationNode {
   stale?: boolean;
   missing?: boolean;
   invalid?: boolean;
+  deletedAt?: number;
+  deleteReason?: 'sidebar-explicit-delete' | 'current-conversation-delete' | 'manual-clean';
   label?: string;
   note?: string;
 }
@@ -65,6 +67,8 @@ export interface GenealogyMemoryNode {
   stale?: boolean;
   missing?: boolean;
   invalid?: boolean;
+  deletedAt?: number;
+  deleteReason?: 'sidebar-explicit-delete' | 'current-conversation-delete' | 'manual-clean';
   label?: string;
   note?: string;
 }
@@ -187,6 +191,8 @@ export interface HydratedConversationNode {
   stale: boolean;
   missing: boolean;
   invalid: boolean;
+  deleted: boolean;
+  deletedAt?: number;
   label?: string;
   note?: string;
 }

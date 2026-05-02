@@ -12,14 +12,18 @@ import {
   cleanInvalidGhostNodes,
   createGenealogyMemoryFilename,
   canRenderHydratedNode,
+  computeRetainedGenealogyGraph,
   exportGenealogyMemory,
+  findConversationPath,
   getRenderableNodeIds,
   hydrateNode,
+  isDescendantOf,
   isAutoBranchGhostNode,
   isValidConversationUrl,
   isVerifiedIdSource,
   loadGenealogyGraph,
   parseGenealogyMemoryImport,
+  repairDeletedTombstoneLineage,
   reconcileImportedGenealogyGraph,
   resetGenealogyGraph,
   saveGenealogyGraph,
@@ -151,6 +155,8 @@ interface MapViewDomRefs {
 
 let mapViewDomRefs: MapViewDomRefs | null = null;
 let mapViewState: MapViewState | null = null;
+let highlightedBranchMarker: HTMLElement | null = null;
+let branchMarkerHighlightTimer: number | null = null;
 
 export function createGenealogyButton(): void {
   if (genealogyBtn) return;
@@ -235,6 +241,7 @@ async function openPanel(): Promise<void> {
 }
 
 export function closePanel(): void {
+  clearBranchMarkerHighlight();
   genealogyPanel?.remove();
   genealogyPanel = null;
   closeMapView();
@@ -420,11 +427,12 @@ function getHydratedMainTreeNodes(
   sidebarCatalog: SidebarCatalogEntry[],
   currentConversation: CurrentConversation
 ): HydratedConversationNode[] {
-  const ids = getRenderableNodeIds(graph, { catalog: sidebarCatalog, currentConversation });
+  const retainedGraph = computeRetainedGenealogyGraph(graph, { catalog: sidebarCatalog, currentConversation });
+  const ids = getRenderableNodeIds(retainedGraph, { catalog: sidebarCatalog, currentConversation });
   return ids
-    .map((id) => hydrateNode(id, { catalog: sidebarCatalog, currentConversation }, graph))
+    .map((id) => hydrateNode(id, { catalog: sidebarCatalog, currentConversation }, retainedGraph))
     .filter((node): node is HydratedConversationNode => !!node)
-    .filter((node) => canRenderHydratedNode(node, graph, { catalog: sidebarCatalog, currentConversation }));
+    .filter((node) => canRenderHydratedNode(node, retainedGraph, { catalog: sidebarCatalog, currentConversation }));
 }
 
 export function isMainTreeNode(
@@ -445,8 +453,9 @@ function renderTree(
   sidebarCatalog: SidebarCatalogEntry[],
   currentConversation: CurrentConversation
 ): void {
+  const retainedGraph = computeRetainedGenealogyGraph(graph, { catalog: sidebarCatalog, currentConversation });
   container.innerHTML = '';
-  const mainNodes = getHydratedMainTreeNodes(graph, sidebarCatalog, currentConversation);
+  const mainNodes = getHydratedMainTreeNodes(retainedGraph, sidebarCatalog, currentConversation);
   if (mainNodes.length === 0) {
     const empty = document.createElement('div');
     empty.className = CLASS_NAMES.branchEmpty;
@@ -458,16 +467,16 @@ function renderTree(
   }
 
   const mainIds = new Set(mainNodes.map((node) => node.conversationId));
-  const childrenMap = buildChildrenMap(graph, mainIds, sidebarCatalog, currentConversation);
+  const childrenMap = buildChildrenMap(retainedGraph, mainIds, sidebarCatalog, currentConversation);
   const nodesWithIncoming = new Set(
-    graph.edges
+    retainedGraph.edges
       .filter((edge) => mainIds.has(edge.toConversationId) && mainIds.has(edge.fromConversationId))
       .map((edge) => edge.toConversationId)
   );
   const roots = mainNodes.filter((node) => !nodesWithIncoming.has(node.conversationId));
   const rendered = new Set<string>();
   for (const root of roots.sort((a, b) => a.firstSeenAt - b.firstSeenAt)) {
-    renderNodeRow(graph, root, container, 0, childrenMap, rendered, sidebarCatalog, currentConversation);
+    renderNodeRow(retainedGraph, root, container, 0, childrenMap, rendered, sidebarCatalog, currentConversation);
   }
 }
 
@@ -509,8 +518,13 @@ function renderNodeRow(
   const isExpanded = hasChildren ? expandedNodeIds.has(node.conversationId) : false;
 
   const row = document.createElement('div');
-  row.className = CLASS_NAMES.branchRow + (node.isCurrent ? ` ${CLASS_NAMES.branchRowActive}` : '');
-  if (node.unresolved || node.stale || node.missing) row.style.opacity = '0.6';
+  row.className = CLASS_NAMES.branchRow + (node.isCurrent ? ` ${CLASS_NAMES.branchRowActive}` : '') + (node.deleted ? ` ${CLASS_NAMES.branchRowDeleted}` : '');
+  if (node.deleted) {
+    row.style.opacity = '0.78';
+    row.style.filter = 'grayscale(0.2)';
+  } else if (node.unresolved || node.stale || node.missing) {
+    row.style.opacity = '0.6';
+  }
   row.style.marginLeft = `${depth * 20}px`;
   row.setAttribute('data-conversation-id', node.conversationId);
 
@@ -536,6 +550,7 @@ function renderNodeRow(
   main.className = 'longconv-branch-row-main';
   main.title = node.url || node.conversationId;
   main.style.cursor = 'pointer';
+  if (node.deleted) main.style.color = 'rgb(148, 163, 184)';
   main.addEventListener('click', (event) => {
     event.stopPropagation();
     navigateToConversation(node);
@@ -549,8 +564,9 @@ function renderNodeRow(
   meta.className = CLASS_NAMES.branchRowMeta;
   const parts: string[] = [];
   parts.push(`source: ${node.source}`);
-  if (node.stale || node.missing) parts.push('missing from sidebar');
-  if (node.unresolved) parts.push('unresolved');
+  if (node.deleted) parts.push(`deleted${node.deletedAt ? ` · ${formatRelativeTime(node.deletedAt)}` : ''}`);
+  else if (node.unresolved) parts.push('unresolved');
+  else if (node.stale || node.missing) parts.push('stale / not currently visible');
   parts.push(formatRelativeTime(node.lastSeenAt));
   meta.textContent = parts.join(' · ');
 
@@ -585,9 +601,10 @@ function renderNodeRow(
 }
 
 function buildNodeLabel(node: HydratedConversationNode): string {
+  if (node.deleted) return `${node.title} (deleted)`;
   if (node.unresolved) return `${node.title} (unresolved)`;
   if (node.isCurrent) return `${node.title} (active)`;
-  if (node.stale || node.missing) return `${node.title} (missing)`;
+  if (node.stale || node.missing) return `${node.title} (stale)`;
   return node.title || node.conversationId;
 }
 
@@ -596,12 +613,13 @@ function seedExpandedState(
   sidebarCatalog: SidebarCatalogEntry[],
   currentConversation: CurrentConversation
 ): void {
-  const mainNodes = getHydratedMainTreeNodes(graph, sidebarCatalog, currentConversation);
+  const retainedGraph = computeRetainedGenealogyGraph(graph, { catalog: sidebarCatalog, currentConversation });
+  const mainNodes = getHydratedMainTreeNodes(retainedGraph, sidebarCatalog, currentConversation);
   const mainIds = new Set(mainNodes.map((node) => node.conversationId));
-  const childrenMap = buildChildrenMap(graph, mainIds, sidebarCatalog, currentConversation);
+  const childrenMap = buildChildrenMap(retainedGraph, mainIds, sidebarCatalog, currentConversation);
   for (const node of mainNodes) {
     const hasChildren = (childrenMap.get(node.conversationId) ?? []).length > 0;
-    const hasIncoming = graph.edges.some((edge) => edge.toConversationId === node.conversationId);
+    const hasIncoming = retainedGraph.edges.some((edge) => edge.toConversationId === node.conversationId);
     if (!hasIncoming && hasChildren) expandedNodeIds.add(node.conversationId);
   }
 
@@ -610,7 +628,7 @@ function seedExpandedState(
   let cursor: string | undefined = activeId;
   while (cursor) {
     expandedNodeIds.add(cursor);
-    const incoming = graph.edges.find((edge) => edge.toConversationId === cursor);
+    const incoming = retainedGraph.edges.find((edge) => edge.toConversationId === cursor);
     cursor = incoming?.fromConversationId;
   }
 }
@@ -783,11 +801,12 @@ function buildMapViewGraphForFocus(
   childrenMap: Map<string, HydratedConversationNode[]>;
   focusConversationId: string | null;
 } {
-  const requestedFocusId = focusConversationId || (currentConversation.valid ? currentConversation.conversationId : '') || graph.currentConversationId || '';
+  const retainedGraph = computeRetainedGenealogyGraph(graph, { catalog: sidebarCatalog, currentConversation });
+  const requestedFocusId = focusConversationId || (currentConversation.valid ? currentConversation.conversationId : '') || retainedGraph.currentConversationId || '';
   const adjacency = new Map<string, Set<string>>();
   const edgeNodeIds = new Set<string>();
 
-  for (const edge of graph.edges) {
+  for (const edge of retainedGraph.edges) {
     edgeNodeIds.add(edge.fromConversationId);
     edgeNodeIds.add(edge.toConversationId);
     if (!adjacency.has(edge.fromConversationId)) adjacency.set(edge.fromConversationId, new Set());
@@ -797,11 +816,11 @@ function buildMapViewGraphForFocus(
   }
 
   const contextGraph: ConversationGenealogyGraph = {
-    schemaVersion: graph.schemaVersion,
+    schemaVersion: retainedGraph.schemaVersion,
     nodes: {},
     edges: [],
     currentConversationId: requestedFocusId || currentConversation.conversationId,
-    updatedAt: graph.updatedAt,
+    updatedAt: retainedGraph.updatedAt,
   };
 
   if (requestedFocusId && edgeNodeIds.has(requestedFocusId)) {
@@ -817,18 +836,18 @@ function buildMapViewGraphForFocus(
     }
 
     for (const id of componentIds) {
-      const hydrated = hydrateNode(id, { catalog: sidebarCatalog, currentConversation }, graph);
-      const metadata = graph.nodes[id];
-      if (hydrated && metadata && canRenderHydratedNode(hydrated, graph, { catalog: sidebarCatalog, currentConversation })) {
+      const hydrated = hydrateNode(id, { catalog: sidebarCatalog, currentConversation }, retainedGraph);
+      const metadata = retainedGraph.nodes[id];
+      if (hydrated && metadata && canRenderHydratedNode(hydrated, retainedGraph, { catalog: sidebarCatalog, currentConversation })) {
         contextGraph.nodes[id] = { ...metadata, isCurrent: id === currentConversation.conversationId };
       }
     }
-    contextGraph.edges = graph.edges.filter(
+    contextGraph.edges = retainedGraph.edges.filter(
       (edge) => componentIds.has(edge.fromConversationId) && componentIds.has(edge.toConversationId)
     );
   } else if (requestedFocusId) {
-    const hydrated = hydrateNode(requestedFocusId, { catalog: sidebarCatalog, currentConversation }, graph);
-    const metadata = graph.nodes[requestedFocusId];
+    const hydrated = hydrateNode(requestedFocusId, { catalog: sidebarCatalog, currentConversation }, retainedGraph);
+    const metadata = retainedGraph.nodes[requestedFocusId];
     if (metadata) {
       contextGraph.nodes[requestedFocusId] = { ...metadata, isCurrent: requestedFocusId === currentConversation.conversationId };
     } else if (hydrated) {
@@ -907,6 +926,7 @@ function buildMapViewGraphForFocus(
 }
 
 function closeMapView(): void {
+  clearBranchMarkerHighlight();
   genealogyMapModal?.remove();
   genealogyMapModal = null;
   mapViewDomRefs = null;
@@ -1068,22 +1088,27 @@ function renderMapNodes(
 
   for (const layoutNode of layoutNodes) {
     const nodeCard = document.createElement('div');
-    nodeCard.className = CLASS_NAMES.branchMapNode + (layoutNode.node.isCurrent ? ` ${CLASS_NAMES.branchRowActive}` : '');
+    nodeCard.className = CLASS_NAMES.branchMapNode + (layoutNode.node.isCurrent ? ` ${CLASS_NAMES.branchRowActive}` : '') + (layoutNode.node.deleted ? ` ${CLASS_NAMES.branchMapNodeDeleted}` : '');
     nodeCard.setAttribute('data-conversation-id', layoutNode.node.conversationId);
     nodeCard.style.left = `${layoutNode.x}px`;
     nodeCard.style.top = `${layoutNode.y}px`;
     nodeCard.style.width = `${layoutNode.width}px`;
     nodeCard.style.minHeight = `${layoutNode.height}px`;
-    nodeCard.style.opacity = layoutNode.node.unresolved || layoutNode.node.stale || layoutNode.node.missing ? '0.68' : '1';
+    nodeCard.style.opacity = layoutNode.node.deleted ? '0.84' : layoutNode.node.unresolved || layoutNode.node.stale || layoutNode.node.missing ? '0.68' : '1';
+    if (layoutNode.node.deleted) {
+      nodeCard.style.borderStyle = 'dashed';
+      nodeCard.style.filter = 'grayscale(0.22)';
+    }
 
     const header = document.createElement('div');
     header.className = CLASS_NAMES.branchMapNodeHeader;
 
     const badges = document.createElement('div');
     badges.className = CLASS_NAMES.branchMapNodeBadges;
-    if (layoutNode.node.isCurrent) badges.appendChild(makeNodeBadge('Active'));
-    if (layoutNode.node.unresolved) badges.appendChild(makeNodeBadge('Unresolved'));
-    else if (layoutNode.node.missing || layoutNode.node.stale) badges.appendChild(makeNodeBadge('Missing'));
+    if (layoutNode.node.deleted) badges.appendChild(makeNodeBadge('Deleted'));
+    else if (layoutNode.node.isCurrent) badges.appendChild(makeNodeBadge('Active'));
+    else if (layoutNode.node.unresolved) badges.appendChild(makeNodeBadge('Unresolved'));
+    else if (layoutNode.node.missing || layoutNode.node.stale) badges.appendChild(makeNodeBadge('Stale'));
 
     const actions = document.createElement('div');
     actions.className = CLASS_NAMES.branchMapNodeActions;
@@ -1129,7 +1154,8 @@ function renderMapNodes(
 
     const title = document.createElement('div');
     title.className = CLASS_NAMES.branchMapNodeTitle;
-    title.textContent = layoutNode.node.title || layoutNode.node.conversationId;
+    title.textContent = buildNodeLabel(layoutNode.node);
+    if (layoutNode.node.deleted) title.style.color = 'rgb(148, 163, 184)';
     const meta = document.createElement('div');
     meta.className = CLASS_NAMES.branchRowMeta;
     meta.textContent = buildMapMeta(layoutNode.node);
@@ -1167,7 +1193,8 @@ function makeNodeBadge(label: string): HTMLElement {
 
 function buildMapMeta(node: HydratedConversationNode): string {
   const parts: string[] = [node.source, formatRelativeTime(node.lastSeenAt)];
-  if (node.stale) parts.unshift('stale / unverified');
+  if (node.deleted) parts.unshift(`deleted${node.deletedAt ? ` · ${formatRelativeTime(node.deletedAt)}` : ''}`);
+  else if (node.stale) parts.unshift('stale / unverified');
   return parts.join(' · ');
 }
 
@@ -1612,11 +1639,12 @@ function isMapInteractiveTarget(target: HTMLElement | null): boolean {
 }
 
 function getNavigationTarget(node: HydratedConversationNode): {
-  type: 'current' | 'placeholder' | 'url' | 'fallback' | 'invalid';
+  type: 'current' | 'placeholder' | 'deleted' | 'url' | 'fallback' | 'invalid';
   url?: string;
   message?: string;
 } {
   if (node.isCurrent) return { type: 'current', message: 'Already on this conversation.' };
+  if (node.deleted) return { type: 'deleted', message: 'This conversation was deleted and cannot be opened.' };
   if (node.unresolved || node.idSource === 'placeholder') {
     return { type: 'placeholder', message: 'No valid conversation URL available.' };
   }
@@ -1633,8 +1661,24 @@ function getNavigationTarget(node: HydratedConversationNode): {
 }
 
 function navigateToConversation(node: HydratedConversationNode): void {
+  if (node.deleted) {
+    if (
+      lastGraph &&
+      lastCurrentConversation.valid &&
+      isDescendantOf(lastGraph, lastCurrentConversation.conversationId, node.conversationId)
+    ) {
+      if (scrollToBranchMarkerForDeletedAncestor(node, lastCurrentConversation, lastGraph)) return;
+      clearBranchMarkerHighlight();
+      showHint('This deleted conversation cannot be opened. The branch marker is not visible on the current page.');
+      return;
+    }
+    clearBranchMarkerHighlight();
+    showHint('This conversation was deleted and cannot be opened.');
+    return;
+  }
+
   const target = getNavigationTarget(node);
-  if (target.type === 'current' || target.type === 'placeholder' || target.type === 'invalid') {
+  if (target.type === 'current' || target.type === 'placeholder' || target.type === 'deleted' || target.type === 'invalid') {
     showHint(target.message ?? 'No valid conversation URL available.');
     return;
   }
@@ -1642,6 +1686,116 @@ function navigateToConversation(node: HydratedConversationNode): void {
     console.debug('[LongConv Genealogy] navigate', node.title, target.url);
     window.location.assign(target.url);
   }
+}
+
+function scrollToBranchMarkerForDeletedAncestor(
+  deletedNode: HydratedConversationNode,
+  currentConversation: CurrentConversation,
+  graph: ConversationGenealogyGraph
+): boolean {
+  if (!currentConversation.valid) return false;
+
+  const path = findConversationPath(graph, deletedNode.conversationId, currentConversation.conversationId);
+  if (!path || path.length < 2) return false;
+
+  const aliases = deletedNode.aliases ?? [];
+  const terms = dedupeSearchTerms([
+    deletedNode.title,
+    ...aliases,
+    `从 ${deletedNode.title} 建立的分支`,
+    ...aliases.map((alias) => `从 ${alias} 建立的分支`),
+    `branch created from ${deletedNode.title}`,
+    ...aliases.map((alias) => `branch created from ${alias}`),
+  ]);
+
+  const match = findStrictBranchMarkerElement(terms);
+
+  if (!match) return false;
+
+  match.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  highlightBranchMarker(match);
+  return true;
+}
+
+function findStrictBranchMarkerElement(parentTitlesOrAliases: string[]): HTMLElement | null {
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>('div, span, p, h1, h2, h3, h4, h5, h6'));
+  const viewportWidth = window.innerWidth || 1200;
+  const matches: Array<{ el: HTMLElement; rect: DOMRect; textLength: number; childCount: number }> = [];
+
+  for (const element of candidates) {
+    if (!isStrictMarkerCandidate(element, viewportWidth)) continue;
+    const text = (element.textContent ?? '').trim().toLowerCase();
+    if (!text) continue;
+    if (!parentTitlesOrAliases.some((term) => text.includes(term))) continue;
+    matches.push({
+      el: element,
+      rect: element.getBoundingClientRect(),
+      textLength: text.length,
+      childCount: element.children.length,
+    });
+  }
+
+  if (matches.length === 0) return null;
+  matches.sort((a, b) => {
+    if (a.childCount !== b.childCount) return a.childCount - b.childCount;
+    if (a.textLength !== b.textLength) return a.textLength - b.textLength;
+    return a.rect.height - b.rect.height;
+  });
+  return matches[0].el;
+}
+
+function isStrictMarkerCandidate(element: HTMLElement, viewportWidth: number): boolean {
+  if (element === document.body || element === document.documentElement) return false;
+  if (element.tagName.toLowerCase() === 'main') return false;
+  if (element.matches('[data-testid^="conversation-turn-"]')) return false;
+  if (element.closest('[data-testid^="conversation-turn-"]') === element) return false;
+  if (element.closest(`.${CLASS_NAMES.branchPanel}`) || element.closest(`.${CLASS_NAMES.branchMapBackdrop}`)) return false;
+  if (element.closest('form, nav, menu, button, textarea, input, [contenteditable="true"]')) return false;
+
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  if (rect.height > 120 || rect.height > 160) return false;
+  if (rect.width > viewportWidth) return false;
+
+  const text = (element.textContent ?? '').trim();
+  if (text.length < 4 || text.length > 160) return false;
+  if (element.querySelectorAll('[data-testid^="conversation-turn-"]').length > 1) return false;
+
+  const style = window.getComputedStyle(element);
+  if (style.visibility === 'hidden' || style.display === 'none') return false;
+  return true;
+}
+
+function highlightBranchMarker(el: HTMLElement): void {
+  clearBranchMarkerHighlight();
+  highlightedBranchMarker = el;
+  highlightedBranchMarker.classList.add('longconv-branch-marker-highlight');
+  branchMarkerHighlightTimer = window.setTimeout(() => {
+    clearBranchMarkerHighlight();
+  }, 2000);
+}
+
+function clearBranchMarkerHighlight(): void {
+  if (branchMarkerHighlightTimer !== null) {
+    window.clearTimeout(branchMarkerHighlightTimer);
+    branchMarkerHighlightTimer = null;
+  }
+  if (highlightedBranchMarker) {
+    highlightedBranchMarker.classList.remove('longconv-branch-marker-highlight');
+  }
+  highlightedBranchMarker = null;
+}
+
+function dedupeSearchTerms(values: string[]): string[] {
+  const seen = new Set<string>();
+  const results: string[] = [];
+  for (const value of values) {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    results.push(normalized);
+  }
+  return results;
 }
 
 function renderDiagnostics(d: GenealogyDiagnostics, container: HTMLElement): void {
@@ -1739,6 +1893,9 @@ export function setLatestGenealogySnapshot(
   sidebarCatalog: SidebarCatalogEntry[],
   currentConversation: CurrentConversation
 ): void {
+  if (lastCurrentConversation.conversationId !== currentConversation.conversationId) {
+    clearBranchMarkerHighlight();
+  }
   lastGraph = graph;
   lastDiagnostics = diagnostics;
   lastSidebarCatalog = sidebarCatalog;
@@ -1783,6 +1940,7 @@ export async function refreshGenealogyFromStorage(): Promise<void> {
 }
 
 export function cleanupGenealogyUI(): void {
+  clearBranchMarkerHighlight();
   closePanel();
   removeGenealogyButton();
   document.querySelectorAll('.longconv-not-loaded-hint').forEach((el) => el.remove());
@@ -1794,6 +1952,7 @@ export const __TEST__ = {
   closePanel,
   openBranchMapView,
   buildMapViewGraphForFocus,
+  computeRetainedGenealogyGraph,
   setLatestGenealogySnapshot,
   openPanel,
   updatePanelHint,
@@ -1814,6 +1973,10 @@ export const __TEST__ = {
   truncateNote,
   isMapInteractiveTarget,
   navigateToConversation,
+  scrollToBranchMarkerForDeletedAncestor,
+  findStrictBranchMarkerElement,
+  highlightBranchMarker,
+  clearBranchMarkerHighlight,
   getNavigationTarget,
   buildNodeLabel,
   buildImportSummary,
@@ -1822,6 +1985,7 @@ export const __TEST__ = {
   readMapUiSettings,
   handleCancelImport,
   handleCancelClean,
+  cleanupGenealogyUI,
   renderTree,
   hydrateNode,
   scanSidebarCatalog,

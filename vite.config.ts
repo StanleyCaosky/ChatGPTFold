@@ -1,5 +1,9 @@
 import { defineConfig } from 'vite';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export default defineConfig(({ mode }) => ({
   resolve: {
@@ -9,29 +13,7 @@ export default defineConfig(({ mode }) => ({
     },
   },
   define: {
-    // Enable debug bridge in development mode only
     'window.__LONGCONV_DEBUG_ENABLED__': mode === 'development',
-  },
-  build: {
-    outDir: 'dist',
-    sourcemap: 'inline',
-    minify: false,
-    rollupOptions: {
-      input: {
-        popup: path.resolve(__dirname, 'src/popup/popup.html'),
-        'content/index': path.resolve(__dirname, 'src/content/index.ts'),
-        'content/pageBridge': path.resolve(__dirname, 'src/content/pageBridge.ts'),
-      },
-      output: {
-        entryFileNames: 'src/[name].js',
-        assetFileNames: (assetInfo) => {
-          if (assetInfo.name?.endsWith('.css')) {
-            return 'assets/[name][extname]';
-          }
-          return 'assets/[name][extname]';
-        },
-      },
-    },
   },
   test: {
     environment: 'jsdom',
