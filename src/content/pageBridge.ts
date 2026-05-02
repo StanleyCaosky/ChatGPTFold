@@ -20,5 +20,5 @@
     },
   };
 
-  console.debug('[LongConv] page debug bridge ready');
+  console.log('[LongConv] page debug bridge ready');
 })();

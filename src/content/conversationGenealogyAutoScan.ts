@@ -284,7 +284,7 @@ export async function runAutoGenealogyScan(reason: AutoScanReason): Promise<Gene
     diagnosticsListener?.(result.diagnostics);
     return result;
   } catch (error) {
-    console.debug('[LongConv Genealogy] Auto scan failed:', reason, error);
+    debugLog('[LongConv Genealogy] Auto scan failed', () => ({ reason, error }));
     return null;
   } finally {
     autoScanInFlight = null;
@@ -322,3 +322,4 @@ export const __TEST__ = {
   clearPendingTimers,
   notifyPotentialMarkerMutation,
 };
+import { debugLog } from './logger';

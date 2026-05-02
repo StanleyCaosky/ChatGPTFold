@@ -98,18 +98,33 @@ function getVisibleText(el: HTMLElement): string {
 // ── Candidate filtering ──────────────────────────────────────────────
 
 const EXCLUDE_SELECTOR =
-  'button, svg, nav, aside, form, textarea, input, [contenteditable="true"], [role="button"]';
+  'button, svg, nav, menu, aside, form, textarea, input, [contenteditable="true"], [role="button"]';
+
+const BLOCK_SELECTOR = 'div, section, article, p, ul, ol, pre, blockquote';
 
 function isExcluded(el: HTMLElement): boolean {
   if (!el.isConnected) return true;
   if (el.closest(`[${DATA_ATTRS.inserted}]`)) return true;
   if (el.matches(EXCLUDE_SELECTOR)) return true;
-  if (el.closest('form, textarea, nav, aside, [contenteditable="true"]')) return true;
+  if (el.closest('form, textarea, nav, menu, aside, [contenteditable="true"]')) return true;
+  const className = typeof el.className === 'string' ? el.className.toLowerCase() : '';
+  const testId = (el.getAttribute('data-testid') || '').toLowerCase();
+  const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+  const combined = `${className} ${testId} ${ariaLabel}`;
+  if (/toolbar|actions|controls|sources|source|copy|regenerate|composer|separator|branch-marker/.test(combined)) {
+    return true;
+  }
   return false;
+}
+
+function isTurnContainer(el: HTMLElement): boolean {
+  const testId = el.getAttribute('data-testid') || '';
+  return /^conversation-turn-/.test(testId);
 }
 
 function isValidCandidate(el: HTMLElement): boolean {
   if (isExcluded(el)) return false;
+  if (isTurnContainer(el)) return false;
 
   const m = measureCandidate(el);
   if (m.textLen < 20) return false;
@@ -149,11 +164,15 @@ function collectCandidates(turnEl: HTMLElement): ScoredCandidate[] {
     ['[data-message-author-role="assistant"] .markdown', 1000],
     ['[data-message-author-role="assistant"] .prose', 1000],
     ['[data-message-author-role="assistant"] [class*="markdown"]', 1000],
+    ['[data-message-author-role="assistant"] [class*="prose"]', 1000],
+    ['[data-message-author-role="assistant"] article', 900],
     ['[data-message-author-role="assistant"]', 500],
     ['[data-message-author-role="user"]', 500],
     ['[data-message-id] .markdown', 1000],
     ['[data-message-id] .prose', 1000],
     ['[data-message-id] [class*="markdown"]', 1000],
+    ['[data-message-id] [class*="prose"]', 1000],
+    ['[data-message-id] article', 900],
     ['[data-message-id]', 0],
   ];
 
@@ -175,19 +194,73 @@ function collectCandidates(turnEl: HTMLElement): ScoredCandidate[] {
       });
     }
   }
+  return scored;
+}
 
-  // Only try turnEl itself as last resort when no other candidates found
-  if (scored.length === 0 && !seen.has(turnEl) && isValidCandidate(turnEl)) {
-    const measurement = measureCandidate(turnEl);
+function scoreFallbackCandidate(el: HTMLElement): number {
+  const measurement = measureCandidate(el);
+  const buttons = el.querySelectorAll('button, [role="button"]').length;
+  const links = el.querySelectorAll('a').length;
+  const buttonPenalty = (buttons + links) * 20;
+  const sourceBonus = el.matches('.markdown, .prose, [class*="markdown"], [class*="prose"], article') ? 250 : 0;
+  return scoreCandidate(measurement) + sourceBonus - buttonPenalty;
+}
+
+function collectFallbackCandidates(root: HTMLElement, source: string): ScoredCandidate[] {
+  const scored: ScoredCandidate[] = [];
+  const seen = new Set<HTMLElement>();
+  const candidates = root.matches(BLOCK_SELECTOR)
+    ? [root, ...Array.from(root.querySelectorAll<HTMLElement>(BLOCK_SELECTOR))]
+    : Array.from(root.querySelectorAll<HTMLElement>(BLOCK_SELECTOR));
+
+  for (const el of candidates) {
+    if (seen.has(el)) continue;
+    seen.add(el);
+    if (!root.contains(el)) continue;
+    if (!isValidCandidate(el)) continue;
+    const measurement = measureCandidate(el);
     scored.push({
-      el: turnEl,
+      el,
       measurement,
-      score: scoreCandidate(measurement),
-      source: 'turnEl',
+      score: scoreFallbackCandidate(el),
+      source,
     });
   }
 
+  scored.sort((a, b) => b.score - a.score);
   return scored;
+}
+
+function findBestEffortContent(turnEl: HTMLElement): HTMLElement | null {
+  const scopedRoots = [
+    ...Array.from(turnEl.querySelectorAll<HTMLElement>('[data-message-author-role], [data-message-id]')),
+  ];
+
+  for (const root of scopedRoots) {
+    const fallbackCandidates = collectFallbackCandidates(root, 'fallback-block');
+    if (fallbackCandidates.length > 0) {
+      return fallbackCandidates[0].el;
+    }
+  }
+
+  return null;
+}
+
+function preferInnerContentCandidate(top: ScoredCandidate, turnEl: HTMLElement): HTMLElement | null {
+  const source = top.source;
+  if (source !== '[data-message-author-role="assistant"]' && source !== '[data-message-author-role="user"]' && source !== '[data-message-id]') {
+    return null;
+  }
+
+  const nestedCandidates = collectFallbackCandidates(top.el, 'fallback-inner');
+  const nested = nestedCandidates.find((candidate) => candidate.el !== top.el);
+  if (!nested) return null;
+
+  if (nested.measurement.textLen >= top.measurement.textLen * 0.5) {
+    return nested.el;
+  }
+
+  return null;
 }
 
 // ── Suspicious height mismatch ───────────────────────────────────────
@@ -242,13 +315,16 @@ export function getEffectiveHeight(
 export function findMessageContent(turnEl: HTMLElement): HTMLElement | null {
   const candidates = collectCandidates(turnEl);
 
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) return findBestEffortContent(turnEl);
 
   // Sort by score descending (highest renderedHeight + textLen wins)
   candidates.sort((a, b) => b.score - a.score);
 
   // If top candidate has suspicious height mismatch, try to find a better one
   const top = candidates[0];
+  const preferredInner = preferInnerContentCandidate(top, turnEl);
+  if (preferredInner) return preferredInner;
+
   if (isSuspiciousHeightMismatch(top.measurement)) {
     // Try parent chain: walk up 1-4 levels looking for larger container
     for (let depth = 1; depth <= 4; depth++) {

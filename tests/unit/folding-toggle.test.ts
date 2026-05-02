@@ -3,6 +3,18 @@ import { processTurn } from '../../src/content/folding';
 import { DEFAULT_CONFIG } from '../../src/shared/config';
 import { CLASS_NAMES } from '../../src/shared/constants';
 import { getState } from '../../src/content/state';
+import { resetDebugLogState } from '../../src/content/logger';
+
+const mockChrome = {
+  runtime: { id: 'ext-id' },
+  storage: {
+    local: {
+      get: vi.fn(async () => ({})),
+      set: vi.fn(async () => undefined),
+      remove: vi.fn(async () => undefined),
+    },
+  },
+};
 
 vi.mock('../../src/content/selectors', () => ({
   findMessageContent: vi.fn(),
@@ -42,10 +54,13 @@ const config = { ...DEFAULT_CONFIG, collapsedLines: 3 };
 describe('assistant toggle controls (external top/bottom)', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    resetDebugLogState();
     document.body.innerHTML = '';
+    (globalThis as unknown as { chrome: typeof mockChrome }).chrome = mockChrome;
     const state = getState();
     state.manualExpanded.clear();
     state.hardDisabled = false;
+    state.disposed = false;
   });
 
   it('creates top and bottom toggle after processTurn', () => {
@@ -235,14 +250,18 @@ describe('assistant toggle controls (external top/bottom)', () => {
 describe('user bubble inline toggle controls', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    resetDebugLogState();
     document.body.innerHTML = '';
+    (globalThis as unknown as { chrome: typeof mockChrome }).chrome = mockChrome;
     const state = getState();
     state.manualExpanded.clear();
     state.hardDisabled = false;
+    state.disposed = false;
   });
 
   // In jsdom, getComputedStyle returns empty bg by default → unreliable root → fallback
   it('fallback: user uses external right-aligned toggle when no reliable bubble root', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const { turnEl } = makeTurn('turn-1', 'user');
     processTurn(turnEl, config);
 
@@ -252,6 +271,7 @@ describe('user bubble inline toggle controls', () => {
     expect(topToggle).not.toBeNull();
     expect(bottomToggle).not.toBeNull();
     expect(topToggle!.classList.contains('longconv-user-toggle')).toBe(true);
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it('fallback: user collapse uses assistant-like .longconv-collapsed on contentEl', () => {

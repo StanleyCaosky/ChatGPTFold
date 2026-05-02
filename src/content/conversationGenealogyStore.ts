@@ -12,6 +12,7 @@ import {
   HydratedConversationNode,
   SidebarCatalogEntry,
 } from '../shared/conversationGenealogyTypes';
+import { safeStorageGet, safeStorageRemove, safeStorageSet } from './extensionContext';
 
 export type { ConversationGenealogyGraph };
 
@@ -86,7 +87,7 @@ export async function loadGenealogyGraph(): Promise<{
   migration: MigrationResult;
 }> {
   try {
-    const result = await chrome.storage.local.get(STORAGE_KEY);
+    const result = await safeStorageGet<Record<string, unknown>>(STORAGE_KEY, {});
     if (!result[STORAGE_KEY]) {
       return {
         graph: createEmptyGenealogyGraph(),
@@ -116,11 +117,11 @@ export async function loadGenealogyGraph(): Promise<{
 export async function saveGenealogyGraph(graph: ConversationGenealogyGraph): Promise<void> {
   graph.updatedAt = Date.now();
   graph.schemaVersion = GENEALOGY_SCHEMA_VERSION;
-  await chrome.storage.local.set({ [STORAGE_KEY]: graph });
+  await safeStorageSet({ [STORAGE_KEY]: graph });
 }
 
 export async function resetGenealogyGraph(): Promise<void> {
-  await chrome.storage.local.remove(STORAGE_KEY);
+  await safeStorageRemove(STORAGE_KEY);
 }
 
 export function createGenealogyMemoryFilename(now = new Date()): string {

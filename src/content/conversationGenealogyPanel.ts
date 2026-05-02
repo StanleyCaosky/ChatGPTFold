@@ -25,6 +25,8 @@ import {
   saveGenealogyGraph,
   updateConversationNodeNote,
 } from './conversationGenealogyStore';
+import { safeStorageGet, safeStorageSet } from './extensionContext';
+import { debugLog } from './logger';
 import { buildCleanSummary, buildDiagnosticsText, buildImportSummary } from '../shared/genealogySummaries';
 import {
   getCurrentConversation,
@@ -925,7 +927,7 @@ function makeMapControlButton(label: string, onClick: () => void): HTMLButtonEle
 async function syncMapUiSettings(): Promise<void> {
   if (!mapViewState) return;
   try {
-    const result = await chrome.storage.local.get(MAP_UI_STORAGE_KEY);
+    const result = await safeStorageGet<Record<string, unknown>>(MAP_UI_STORAGE_KEY, {});
     const raw = result[MAP_UI_STORAGE_KEY] as Partial<GenealogyMapUiState> | undefined;
     mapViewState.showNotePreviews = !!raw?.showNotePreviews;
   } catch {
@@ -935,7 +937,7 @@ async function syncMapUiSettings(): Promise<void> {
 
 async function readMapUiSettings(): Promise<GenealogyMapUiState> {
   try {
-    const result = await chrome.storage.local.get(MAP_UI_STORAGE_KEY);
+    const result = await safeStorageGet<Record<string, unknown>>(MAP_UI_STORAGE_KEY, {});
     const raw = result[MAP_UI_STORAGE_KEY] as Partial<GenealogyMapUiState> | undefined;
     return {
       showNotePreviews: !!raw?.showNotePreviews,
@@ -949,7 +951,7 @@ async function readMapUiSettings(): Promise<GenealogyMapUiState> {
 
 async function saveMapUiSettings(): Promise<void> {
   if (!mapViewState) return;
-  await chrome.storage.local.set({
+  await safeStorageSet({
     [MAP_UI_STORAGE_KEY]: {
       showNotePreviews: mapViewState.showNotePreviews,
     } satisfies GenealogyMapUiState,

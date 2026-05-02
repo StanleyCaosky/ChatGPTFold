@@ -3,24 +3,51 @@ import { findThread, findTurns } from './selectors';
 import { asElement } from './dom-utils';
 import { enqueue, enqueueAll } from './scheduler';
 import { getState } from './state';
+import { debugLog } from './logger';
+import { ensureActiveContentScript, registerDisposeCallback } from './extensionContext';
 
 let bodyObserver: MutationObserver | null = null;
 let threadObserver: MutationObserver | null = null;
 let reinitTimer: ReturnType<typeof setTimeout> | null = null;
 let dynamicRescanTimer: ReturnType<typeof setTimeout> | null = null;
 let currentThread: HTMLElement | null = null;
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
 let onThreadFound: ((thread: HTMLElement) => void) | null = null;
 let onThreadLost: (() => void) | null = null;
+
+registerDisposeCallback(() => {
+  disconnectThreadObserver();
+  disconnectBodyObserver();
+});
+
+function trackTimeout(callback: () => void, delay: number): ReturnType<typeof setTimeout> {
+  const timer = setTimeout(() => {
+    pendingTimers.delete(timer);
+    if (!ensureActiveContentScript()) return;
+    callback();
+  }, delay);
+  pendingTimers.add(timer);
+  return timer;
+}
+
+function clearPendingTimers(): void {
+  for (const timer of pendingTimers) {
+    clearTimeout(timer);
+  }
+  pendingTimers.clear();
+}
 
 export function initBodyObserver(
   onFound: (thread: HTMLElement) => void,
   onLost: () => void
 ): void {
+  if (!ensureActiveContentScript()) return;
   onThreadFound = onFound;
   onThreadLost = onLost;
 
   bodyObserver = new MutationObserver(() => {
+    if (!ensureActiveContentScript()) return;
     scheduleReinitCheck();
   });
 
@@ -69,9 +96,11 @@ function collectTurnsFromMutation(mutation: MutationRecord): HTMLElement[] {
 }
 
 export function initThreadObserver(thread: HTMLElement): void {
+  if (!ensureActiveContentScript()) return;
   currentThread = thread;
 
   threadObserver = new MutationObserver((mutations) => {
+    if (!ensureActiveContentScript()) return;
     const pendingTurns = new Set<HTMLElement>();
     let hasNewTurns = false;
 
@@ -92,8 +121,8 @@ export function initThreadObserver(thread: HTMLElement): void {
       enqueue(turn);
       // For newly added turns, schedule delayed re-enqueue to catch DOM stabilization
       if (hasNewTurns) {
-        setTimeout(() => enqueue(turn), 300);
-        setTimeout(() => enqueue(turn), 1000);
+        trackTimeout(() => enqueue(turn), 300);
+        trackTimeout(() => enqueue(turn), 1000);
       }
     }
 
@@ -112,11 +141,11 @@ export function initThreadObserver(thread: HTMLElement): void {
 
 function scheduleDynamicRescan(reason: string): void {
   if (dynamicRescanTimer) clearTimeout(dynamicRescanTimer);
-  dynamicRescanTimer = setTimeout(() => {
+  dynamicRescanTimer = trackTimeout(() => {
     dynamicRescanTimer = null;
     if (!currentThread || getState().hardDisabled) return;
     const turns = findTurns(currentThread);
-    console.debug(`[LongConv] dynamic rescan: ${reason}, turns: ${turns.length}`);
+    debugLog(`[LongConv] dynamic rescan: ${reason}`, () => ({ turns: turns.length }));
     enqueueAll(turns);
   }, 400);
 }
@@ -128,11 +157,16 @@ export function disconnectThreadObserver(): void {
     clearTimeout(dynamicRescanTimer);
     dynamicRescanTimer = null;
   }
+  clearPendingTimers();
 }
 
 export function disconnectBodyObserver(): void {
   bodyObserver?.disconnect();
   bodyObserver = null;
+  if (reinitTimer) {
+    clearTimeout(reinitTimer);
+    reinitTimer = null;
+  }
 }
 
 export function getCurrentThread(): HTMLElement | null {
@@ -141,13 +175,14 @@ export function getCurrentThread(): HTMLElement | null {
 
 function scheduleReinitCheck(): void {
   if (reinitTimer) clearTimeout(reinitTimer);
-  reinitTimer = setTimeout(() => {
+  reinitTimer = trackTimeout(() => {
     reinitTimer = null;
     performReinitCheck();
   }, DEBOUNCE_REINIT_MS);
 }
 
 function performReinitCheck(): void {
+  if (!ensureActiveContentScript()) return;
   if (getState().hardDisabled) return;
 
   const thread = findThread();

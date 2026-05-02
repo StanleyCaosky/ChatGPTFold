@@ -156,6 +156,70 @@ describe('findMessageContent', () => {
     expect(findMessageContent(turn)).toBeNull();
   });
 
+  it('finds fallback body block without markdown or prose', () => {
+    const turn = document.createElement('div');
+    turn.dataset.testid = 'conversation-turn-9';
+    mockRect(turn, 800, 600);
+
+    const role = document.createElement('div');
+    role.setAttribute('data-message-author-role', 'assistant');
+    mockRect(role, 800, 500);
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'message-toolbar';
+    toolbar.textContent = 'Copy Regenerate Sources';
+    mockRect(toolbar, 800, 40);
+
+    const body = document.createElement('div');
+    body.className = 'message-body';
+    body.textContent = 'This is the real message body with enough content to qualify as the fallback candidate.';
+    mockRect(body, 700, 220);
+
+    role.append(toolbar, body);
+    turn.appendChild(role);
+    document.body.appendChild(turn);
+
+    expect(findMessageContent(turn)).toBe(body);
+  });
+
+  it('does not return the whole conversation turn as fallback', () => {
+    const turn = document.createElement('div');
+    turn.dataset.testid = 'conversation-turn-10';
+    turn.textContent = 'This turn has text but no safe content block to collapse and should be skipped.';
+    mockRect(turn, 800, 400);
+    document.body.appendChild(turn);
+
+    expect(findMessageContent(turn)).toBeNull();
+  });
+
+  it('does not choose button-heavy toolbar fallback', () => {
+    const turn = document.createElement('div');
+    turn.dataset.testid = 'conversation-turn-11';
+    mockRect(turn, 800, 600);
+
+    const role = document.createElement('div');
+    role.setAttribute('data-message-author-role', 'assistant');
+    mockRect(role, 800, 500);
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'toolbar actions';
+    toolbar.textContent = 'Copy Copy Copy Copy';
+    mockRect(toolbar, 600, 120);
+    for (let i = 0; i < 4; i++) {
+      toolbar.appendChild(document.createElement('button'));
+    }
+
+    const body = document.createElement('div');
+    body.textContent = 'The assistant body remains the best block candidate even without markdown prose classes.';
+    mockRect(body, 650, 180);
+
+    role.append(toolbar, body);
+    turn.appendChild(role);
+    document.body.appendChild(turn);
+
+    expect(findMessageContent(turn)).toBe(body);
+  });
+
   it('excludes nav elements', () => {
     const turn = document.createElement('div');
     mockRect(turn, 800, 600);

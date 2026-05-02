@@ -15,6 +15,13 @@ function createFreshState(): RuntimeState {
     coreErrorCount: 0,
     recentCoreErrors: [],
     containmentErrorCount: 0,
+    disposed: false,
+    contentSelectorFailedCount: 0,
+    userBubbleFallbackCount: 0,
+    contextInvalidatedCount: 0,
+    lastSkipReason: null,
+    lastSelectorFailureTestId: null,
+    lastExtensionError: null,
   };
 }
 
@@ -28,6 +35,8 @@ export function resetRuntimeState(): void {
     failSafeLevel: state.failSafeLevel,
     recentCoreErrors: state.recentCoreErrors,
     coreErrorCount: state.coreErrorCount,
+    contextInvalidatedCount: state.contextInvalidatedCount,
+    lastExtensionError: state.lastExtensionError,
   };
   state = createFreshState();
   if (preserve.hardDisabled) {
@@ -36,6 +45,8 @@ export function resetRuntimeState(): void {
     state.recentCoreErrors = preserve.recentCoreErrors;
     state.coreErrorCount = preserve.coreErrorCount;
   }
+  state.contextInvalidatedCount = preserve.contextInvalidatedCount;
+  state.lastExtensionError = preserve.lastExtensionError;
 }
 
 export function forceResetRuntimeState(): void {

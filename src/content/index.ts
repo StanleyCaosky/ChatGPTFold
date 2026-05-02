@@ -31,11 +31,45 @@ import {
 import { PopupMessage, GenealogyStatsResponse } from '../shared/types';
 import { loadGenealogyGraph } from './conversationGenealogyStore';
 import { getCurrentConversation, scanSidebarCatalog } from './conversationGenealogyScanner';
+import { debugError, debugLog } from './logger';
+import {
+  ensureActiveContentScript,
+  registerDisposeCallback,
+  safeStorageSet,
+} from './extensionContext';
 
 let config: Config | null = null;
 let streamingWasActive = false;
+const pendingTimeouts = new Set<ReturnType<typeof setTimeout>>();
+let streamingInterval: ReturnType<typeof setInterval> | null = null;
+
+function trackTimeout(callback: () => void, delay: number): ReturnType<typeof setTimeout> {
+  const timer = setTimeout(() => {
+    pendingTimeouts.delete(timer);
+    if (!ensureActiveContentScript()) return;
+    callback();
+  }, delay);
+  pendingTimeouts.add(timer);
+  return timer;
+}
+
+function clearTrackedTimeouts(): void {
+  for (const timer of pendingTimeouts) {
+    clearTimeout(timer);
+  }
+  pendingTimeouts.clear();
+}
+
+registerDisposeCallback(() => {
+  clearTrackedTimeouts();
+  if (streamingInterval) {
+    clearInterval(streamingInterval);
+    streamingInterval = null;
+  }
+});
 
 async function main(): Promise<void> {
+  if (!ensureActiveContentScript()) return;
   config = await loadConfig();
   if (!config.enabled) return;
 
@@ -43,11 +77,12 @@ async function main(): Promise<void> {
   state.enabled = true;
 
   initScheduler((turnEl) => {
+    if (!ensureActiveContentScript()) return;
     if (!config) return;
     try {
       processTurn(turnEl, config);
     } catch (err) {
-      console.error('[LongConv] Error processing turn:', err);
+      debugError('[LongConv] Error processing turn:', err);
       recordError(err as Error);
     }
     updateStatusBadge();
@@ -66,16 +101,19 @@ async function main(): Promise<void> {
   initGenealogyAutoScan(config, (diagnostics) => {
     if (!config) return;
     loadGenealogyGraph().then(({ graph }) => {
+      if (!ensureActiveContentScript()) return;
       const sidebarCatalog = scanSidebarCatalog();
       const currentConversation = getCurrentConversation(sidebarCatalog);
       setLatestGenealogySnapshot(graph, diagnostics, sidebarCatalog, currentConversation);
-    }).catch(() => {
+    }).catch((error) => {
+      debugLog('[LongConv] snapshot refresh failed', error);
       // Ignore snapshot refresh failures.
     });
   });
 }
 
 function onThreadFound(thread: HTMLElement): void {
+  if (!ensureActiveContentScript()) return;
   if (!config || getState().hardDisabled) return;
 
   injectStyles();
@@ -86,21 +124,21 @@ function onThreadFound(thread: HTMLElement): void {
   clearTransientMarks();
 
   const turns = findTurns(thread);
-  console.debug(`[LongConv] initial turns found: ${turns.length}`);
+  debugLog('[LongConv] initial turns found', () => ({ turns: turns.length }));
   enqueueAll(turns);
 
   // Delayed rescans to catch DOM stabilization after ChatGPT loads
-  setTimeout(() => {
+  trackTimeout(() => {
     if (!config || getState().hardDisabled) return;
     const t = findTurns(thread);
-    console.debug(`[LongConv] delayed rescan (500ms), turns: ${t.length}`);
+    debugLog('[LongConv] delayed rescan (500ms)', () => ({ turns: t.length }));
     enqueueAll(t);
     updateStatusBadge();
   }, 500);
-  setTimeout(() => {
+  trackTimeout(() => {
     if (!config || getState().hardDisabled) return;
     const t = findTurns(thread);
-    console.debug(`[LongConv] delayed rescan (1500ms), turns: ${t.length}`);
+    debugLog('[LongConv] delayed rescan (1500ms)', () => ({ turns: t.length }));
     enqueueAll(t);
     updateStatusBadge();
   }, 1500);
@@ -111,12 +149,14 @@ function onThreadFound(thread: HTMLElement): void {
 }
 
 function onThreadLost(): void {
+  if (!ensureActiveContentScript()) return;
   cleanupPageModifications();
   cleanupGenealogyUI();
   updateStatusBadge();
 }
 
 function handleConfigChanged(newConfig: Config): void {
+  if (!ensureActiveContentScript()) return;
   config = newConfig;
   const state = getState();
   state.enabled = newConfig.enabled;
@@ -148,7 +188,8 @@ function handleConfigChanged(newConfig: Config): void {
 }
 
 function handleStreamingPolling(): void {
-  setInterval(() => {
+  streamingInterval = setInterval(() => {
+    if (!ensureActiveContentScript()) return;
     if (!config || getState().hardDisabled) return;
 
     const active = isStreamingActive();
@@ -163,7 +204,7 @@ function handleStreamingPolling(): void {
       if (lastTurn) {
         scheduleStreamingEndCheck(lastTurn, config);
         // Update badge after streaming end check completes
-        setTimeout(() => updateStatusBadge(), 2000);
+        trackTimeout(() => updateStatusBadge(), 2000);
       }
       handleStreamingSettledForGenealogy();
     }
@@ -175,6 +216,11 @@ function handleStreamingPolling(): void {
 function handleMessages(): void {
   chrome.runtime.onMessage.addListener(
     (msg: PopupMessage, _sender, sendResponse) => {
+      if (!ensureActiveContentScript()) {
+        sendResponse({ ok: false, error: 'Extension context invalidated.' });
+        return false;
+      }
+
       if (msg.type === 'GET_STATUS') {
         sendResponse(getContentStatus());
         return true;
@@ -199,7 +245,7 @@ function handleMessages(): void {
         cleanupAll();
         const state = getState();
         state.enabled = false;
-        chrome.storage.local.set({ longconv_config: { enabled: false } });
+        void safeStorageSet({ longconv_config: { enabled: false } });
         updateStatusBadge();
         sendResponse({ ok: true });
         return true;
@@ -280,5 +326,5 @@ function handleMessages(): void {
 }
 
 main().catch((err) => {
-  console.error('[LongConv] Failed to initialize:', err);
+  debugError('[LongConv] Failed to initialize:', err);
 });

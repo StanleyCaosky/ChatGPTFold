@@ -61,4 +61,11 @@ export interface RuntimeState {
   coreErrorCount: number;
   recentCoreErrors: number[];
   containmentErrorCount: number;
+  disposed: boolean;
+  contentSelectorFailedCount: number;
+  userBubbleFallbackCount: number;
+  contextInvalidatedCount: number;
+  lastSkipReason: string | null;
+  lastSelectorFailureTestId: string | null;
+  lastExtensionError: string | null;
 }

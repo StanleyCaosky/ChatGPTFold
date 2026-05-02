@@ -37,6 +37,7 @@ const ALL_LONGCONV_ATTRS = [
   'data-longconv-streaming',
   'data-longconv-contained',
   'data-longconv-skip',
+  'data-longconv-skip-fingerprint',
   'data-longconv-text-length',
   'data-longconv-scroll-height',
 ];
@@ -93,9 +94,10 @@ export function clearMarks(): void {
     'data-longconv-checked',
     'data-longconv-checked-turn',
     'data-longconv-processing',
-    'data-longconv-skip',
-    'data-longconv-text-length',
-    'data-longconv-scroll-height',
+      'data-longconv-skip',
+      'data-longconv-skip-fingerprint',
+      'data-longconv-text-length',
+      'data-longconv-scroll-height',
   ];
   for (const attr of marksToRemove) {
     document.querySelectorAll(`[${attr}]`).forEach((el) => el.removeAttribute(attr));
@@ -105,10 +107,11 @@ export function clearMarks(): void {
 export function clearTransientMarks(): void {
   // Light cleanup: remove stale skip/processing/checked-turn but keep content checked and collapsed
   const marksToRemove = [
-    'data-longconv-skip',
-    'data-longconv-processing',
-    'data-longconv-checked-turn',
-    'data-longconv-text-length',
+      'data-longconv-skip',
+      'data-longconv-skip-fingerprint',
+      'data-longconv-processing',
+      'data-longconv-checked-turn',
+      'data-longconv-text-length',
     'data-longconv-scroll-height',
   ];
   for (const attr of marksToRemove) {

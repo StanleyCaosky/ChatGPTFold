@@ -2,6 +2,8 @@ import { Config } from '../shared/config';
 import { DATA_ATTRS, CLASS_NAMES, DEBOUNCE_STREAMING_MS } from '../shared/constants';
 import { getState } from './state';
 import { findMessageContent, getEffectiveHeight, measureCandidate, isSuspiciousHeightMismatch } from './selectors';
+import { debugWarnOnce } from './logger';
+import { ensureActiveContentScript } from './extensionContext';
 
 function getVisibleText(el: HTMLElement): string {
   return (el.textContent || '').trim();
@@ -120,15 +122,35 @@ function isManuallyExpanded(turnEl: HTMLElement): boolean {
 }
 
 function markSkip(turnEl: HTMLElement, reason: string): void {
+  const state = getState();
+  const stableReason = reason === 'no-content' ? 'content-selector-failed' : reason;
   const rawTextLen = (turnEl.textContent || '').trim().length;
-  if (rawTextLen > 50 && reason === 'no-content') {
-    turnEl.dataset.longconvSkip = 'content-selector-failed';
-    console.warn('[LongConv] content not found but turn has text', {
-      testid: turnEl.getAttribute('data-testid'),
-      rawTextLen,
-    });
-  } else {
-    turnEl.dataset.longconvSkip = reason;
+  const fingerprint = `${stableReason}:${rawTextLen}:${turnEl.childElementCount}`;
+  const previousReason = turnEl.dataset.longconvSkip;
+  const previousFingerprint = turnEl.dataset.longconvSkipFingerprint;
+
+  turnEl.dataset.longconvSkip = stableReason;
+  turnEl.dataset.longconvSkipFingerprint = fingerprint;
+  state.lastSkipReason = stableReason;
+
+  if (stableReason === 'content-selector-failed') {
+    state.lastSelectorFailureTestId = turnEl.getAttribute('data-testid');
+  }
+
+  if (previousReason === stableReason && previousFingerprint === fingerprint) {
+    return;
+  }
+
+  if (stableReason === 'content-selector-failed') {
+    state.contentSelectorFailedCount++;
+    debugWarnOnce(
+      `content-selector-failed:${getStableTurnKey(turnEl) || state.lastSelectorFailureTestId || 'unknown'}:${fingerprint}`,
+      '[LongConv] content not found but turn has text',
+      () => ({
+        testid: turnEl.getAttribute('data-testid') || 'unknown',
+        rawTextLen,
+      })
+    );
   }
 }
 
@@ -268,10 +290,13 @@ function collapseUserBubbleContent(
   const bubble = findUserBubbleRoot(turnEl, contentEl);
 
   if (!bubble.reliable) {
-    console.warn('[LongConv] reliable user bubble root not found; using assistant-like collapse', {
-      key: getStableTurnKey(turnEl),
-      reason: bubble.reason,
-    });
+    const state = getState();
+    state.userBubbleFallbackCount++;
+    debugWarnOnce(
+      `user-bubble-fallback:${getStableTurnKey(turnEl) || 'unknown'}`,
+      '[LongConv] reliable user bubble root not found; using assistant-like collapse',
+      () => ({ key: getStableTurnKey(turnEl), reason: bubble.reason })
+    );
     collapseAssistantContent(contentEl, config);
     return;
   }
@@ -635,16 +660,18 @@ function repairCollapsibleButNotCollapsed(
   const collapsed = contentEl.dataset.longconvCollapsed === '1';
 
   if (collapsible && should && !collapsed && !isManual) {
-    console.warn('[LongConv] repair: collapsible but not collapsed, forcing collapse', {
-      key,
-      effectiveHeight: getEffectiveHeight(contentEl, turnEl),
-    });
+    debugWarnOnce(
+      `repair-collapse:${key || 'unknown'}`,
+      '[LongConv] repair: collapsible but not collapsed, forcing collapse',
+      () => ({ key, effectiveHeight: getEffectiveHeight(contentEl, turnEl) })
+    );
     collapseByRole(turnEl, contentEl, config);
     ensureToggleControls(turnEl, contentEl, key, config);
   }
 }
 
 export function processTurn(turnEl: HTMLElement, config: Config): void {
+  if (!ensureActiveContentScript()) return;
   if (!config.enabled || !config.autoCollapseEnabled) return;
   if (turnEl.dataset.longconvProcessing === '1') return;
 
@@ -666,15 +693,20 @@ export function processTurn(turnEl: HTMLElement, config: Config): void {
     const key = getStableTurnKey(turnEl);
     const collapsibleNow = shouldCollapse(contentEl, config, turnEl);
     const m = measureCandidate(contentEl);
+    const measuredContentEl = contentEl;
 
     if (isSuspiciousHeightMismatch(m)) {
-      console.warn('[LongConv] suspicious long text with tiny measured height', {
-        key,
-        textLen: m.textLen,
-        contentHeight: m.renderedHeight,
-        effectiveHeight: getEffectiveHeight(contentEl, turnEl),
-        turnHeight: Math.max(turnEl.scrollHeight, turnEl.offsetHeight, turnEl.getBoundingClientRect().height),
-      });
+      debugWarnOnce(
+        `suspicious-height:${key || 'unknown'}`,
+        '[LongConv] suspicious long text with tiny measured height',
+        () => ({
+          key,
+          textLen: m.textLen,
+          contentHeight: m.renderedHeight,
+          effectiveHeight: getEffectiveHeight(measuredContentEl, turnEl),
+          turnHeight: Math.max(turnEl.scrollHeight, turnEl.offsetHeight, turnEl.getBoundingClientRect().height),
+        })
+      );
     }
 
     const skip = canSkipProcessing(turnEl, contentEl, config);
@@ -698,16 +730,19 @@ export function processTurn(turnEl: HTMLElement, config: Config): void {
     repairCollapsibleButNotCollapsed(turnEl, contentEl, config);
 
   } finally {
-    if (contentEl) {
-      repairCollapsibleButNotCollapsed(turnEl, contentEl, config);
+    const finalContentEl = contentEl;
+    if (finalContentEl) {
+      repairCollapsibleButNotCollapsed(turnEl, finalContentEl, config);
     }
     delete turnEl.dataset.longconvProcessing;
   }
 }
 
 export function handleStreamingEnd(turnEl: HTMLElement, config: Config): void {
+  if (!ensureActiveContentScript()) return;
   delete turnEl.dataset.longconvCheckedTurn;
   delete turnEl.dataset.longconvSkip;
+  delete turnEl.dataset.longconvSkipFingerprint;
   delete turnEl.dataset.longconvProcessing;
 
   const contentEl = findMessageContent(turnEl);
@@ -735,6 +770,7 @@ export function scheduleStreamingEndCheck(
   if (streamingTimer) clearTimeout(streamingTimer);
   streamingTimer = setTimeout(() => {
     streamingTimer = null;
+    if (!ensureActiveContentScript()) return;
     handleStreamingEnd(turnEl, config);
   }, delay);
 }

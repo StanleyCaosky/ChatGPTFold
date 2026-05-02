@@ -7,6 +7,7 @@ import {
   PathSource,
   EdgeSource,
 } from '../shared/branchTypes';
+import { safeStorageGet, safeStorageRemove, safeStorageSet } from './extensionContext';
 
 const STORAGE_PREFIX = 'longconv_branch_graph::';
 
@@ -74,7 +75,7 @@ export async function loadBranchGraph(
 ): Promise<BranchGraph> {
   const key = STORAGE_PREFIX + conversationId;
   try {
-    const result = await chrome.storage.local.get(key);
+    const result = await safeStorageGet<Record<string, unknown>>(key, {});
     if (result[key]) {
       const graph = result[key] as BranchGraph;
       // Auto-migrate if schemaVersion is missing or outdated
@@ -93,14 +94,14 @@ export async function saveBranchGraph(graph: BranchGraph): Promise<void> {
   const key = STORAGE_PREFIX + graph.conversationId;
   graph.updatedAt = Date.now();
   graph.schemaVersion = CURRENT_SCHEMA_VERSION;
-  await chrome.storage.local.set({ [key]: graph });
+  await safeStorageSet({ [key]: graph });
 }
 
 export async function resetConversationGraph(
   conversationId: string
 ): Promise<void> {
   const key = STORAGE_PREFIX + conversationId;
-  await chrome.storage.local.remove(key);
+  await safeStorageRemove(key);
 }
 
 // ── Node Operations ─────────────────────────────────────────────────

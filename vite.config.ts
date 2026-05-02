@@ -1,5 +1,4 @@
 import { defineConfig } from 'vite';
-import webExtension from 'vite-plugin-web-extension';
 import path from 'path';
 
 export default defineConfig(({ mode }) => ({
@@ -9,12 +8,6 @@ export default defineConfig(({ mode }) => ({
       '@content': path.resolve(__dirname, 'src/content'),
     },
   },
-  plugins: [
-    webExtension({
-      manifest: path.resolve(__dirname, 'src/manifest.chrome.json'),
-      browser: 'chrome',
-    }),
-  ],
   define: {
     // Enable debug bridge in development mode only
     'window.__LONGCONV_DEBUG_ENABLED__': mode === 'development',
@@ -23,6 +16,22 @@ export default defineConfig(({ mode }) => ({
     outDir: 'dist',
     sourcemap: 'inline',
     minify: false,
+    rollupOptions: {
+      input: {
+        popup: path.resolve(__dirname, 'src/popup/popup.html'),
+        'content/index': path.resolve(__dirname, 'src/content/index.ts'),
+        'content/pageBridge': path.resolve(__dirname, 'src/content/pageBridge.ts'),
+      },
+      output: {
+        entryFileNames: 'src/[name].js',
+        assetFileNames: (assetInfo) => {
+          if (assetInfo.name?.endsWith('.css')) {
+            return 'assets/[name][extname]';
+          }
+          return 'assets/[name][extname]';
+        },
+      },
+    },
   },
   test: {
     environment: 'jsdom',

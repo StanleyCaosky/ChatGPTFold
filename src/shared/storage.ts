@@ -30,3 +30,5 @@ export function onConfigChanged(callback: (config: Config) => void): void {
     }
   });
 }
+
+export { STORAGE_KEY as LONGCONV_CONFIG_STORAGE_KEY };
