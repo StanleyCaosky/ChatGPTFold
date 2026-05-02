@@ -334,6 +334,31 @@
   line-height: 1.5;
 }
 
+.longconv-genealogy-preview {
+  margin: 10px 16px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--longconv-btn-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--longconv-bg) 92%, #3b82f6 8%);
+  color: var(--longconv-btn-hover-color);
+  flex-shrink: 0;
+}
+
+.longconv-genealogy-preview-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.longconv-genealogy-preview-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .longconv-branch-row {
   display: block;
   padding: 2px 8px 2px 8px;

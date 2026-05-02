@@ -4,8 +4,10 @@ import {
   extractCurrentConversationId,
   extractCurrentTitle,
   getCurrentConversation,
+  serializeGraphForComparison,
   scanSidebarCatalog,
   scanSidebarConversations,
+  updateConversationGenealogy,
 } from '../../src/content/conversationGenealogyScanner';
 
 const store: Record<string, unknown> = {};
@@ -46,6 +48,15 @@ describe('current conversation extraction', () => {
       origin: 'https://chatgpt.com',
     } as Location);
     expect(extractCurrentConversationId()).toBe('unknown');
+  });
+
+  it('treats /c/WEB synthetic ids as invalid current conversations', () => {
+    vi.spyOn(window, 'location', 'get').mockReturnValue({
+      pathname: '/c/WEB:70faa19c-0634-4b85-865b-fe7a699ed94c',
+      origin: 'https://chatgpt.com',
+    } as Location);
+    expect(extractCurrentConversationId()).toBe('unknown');
+    expect(getCurrentConversation().valid).toBe(false);
   });
 
   it('prefers sidebar current title over document title', () => {
@@ -144,5 +155,59 @@ describe('parent marker extraction', () => {
     document.body.appendChild(thread);
 
     expect(extractConversationParentMarker()).toBeNull();
+  });
+});
+
+describe('graph comparison and save skipping', () => {
+  it('ignores updatedAt and lastSeenAt in comparison', () => {
+    const first = {
+      schemaVersion: 3,
+      currentConversationId: 'conv-a',
+      updatedAt: 1,
+      nodes: {
+        'conv-a': {
+          conversationId: 'conv-a',
+          title: 'A',
+          url: 'https://chatgpt.com/c/conv-a',
+          normalizedTitle: 'a',
+          source: 'current-page',
+          firstSeenAt: 1,
+          lastSeenAt: 1,
+        },
+      },
+      edges: [],
+    };
+    const second = {
+      ...first,
+      updatedAt: 999,
+      nodes: {
+        'conv-a': {
+          ...first.nodes['conv-a'],
+          lastSeenAt: 999,
+        },
+      },
+    };
+
+    expect(serializeGraphForComparison(first as any)).toBe(serializeGraphForComparison(second as any));
+  });
+
+  it('does not save when graph is unchanged', async () => {
+    vi.spyOn(window, 'location', 'get').mockReturnValue({
+      pathname: '/c/conv-a',
+      origin: 'https://chatgpt.com',
+    } as Location);
+    document.title = 'A - ChatGPT';
+    const link = document.createElement('a');
+    link.href = '/c/conv-a';
+    link.textContent = 'A';
+    document.body.appendChild(link);
+
+    const first = await updateConversationGenealogy();
+    const setCallsAfterFirst = mockChrome.storage.local.set.mock.calls.length;
+    const second = await updateConversationGenealogy();
+
+    expect(first.graphChanged).toBe(true);
+    expect(second.graphChanged).toBe(false);
+    expect(mockChrome.storage.local.set.mock.calls.length).toBe(setCallsAfterFirst);
   });
 });

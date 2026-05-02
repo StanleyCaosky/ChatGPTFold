@@ -10,60 +10,116 @@
   <div class="popup-container">
     <h1>Long Conversation Stabilizer</h1>
 
-    <div class="settings-group">
-      <label class="setting-row">
-        <span>启用插件</span>
-        <input type="checkbox" id="enabled" checked>
-      </label>
+    <div id="notice" class="notice"></div>
 
-      <label class="setting-row">
-        <span>自动折叠长消息</span>
-        <input type="checkbox" id="autoCollapseEnabled" checked>
-      </label>
+    <button class="section-toggle" data-section-toggle="foldingSection" aria-expanded="true">Folding Settings</button>
+    <div id="foldingSection" class="section-body">
+      <div class="settings-group">
+        <label class="setting-row">
+          <span>启用插件</span>
+          <input type="checkbox" id="enabled" checked>
+        </label>
 
-      <div class="setting-row">
-        <span>折叠行数</span>
-        <select id="collapsedLines">
-          <option value="3">3</option>
-          <option value="5">5</option>
-          <option value="10">10</option>
-        </select>
+        <label class="setting-row">
+          <span>自动折叠长消息</span>
+          <input type="checkbox" id="autoCollapseEnabled" checked>
+        </label>
+
+        <div class="setting-row">
+          <span>折叠行数</span>
+          <select id="collapsedLines">
+            <option value="3">3</option>
+            <option value="5">5</option>
+            <option value="10">10</option>
+          </select>
+        </div>
+
+        <div class="setting-row">
+          <span>视口占比阈值</span>
+          <input type="number" id="minViewportRatioToCollapse" min="0.1" max="2" step="0.05">
+        </div>
+
+        <div class="setting-row">
+          <span>最小高度(px)</span>
+          <input type="number" id="minRenderedHeightToCollapsePx" min="100" step="50">
+        </div>
+
+        <div class="setting-row">
+          <span>最小字符数(兜底)</span>
+          <input type="number" id="minCharsToCollapse" min="500" step="500">
+        </div>
+
+        <div class="setting-row">
+          <span>最近N条不做重型优化</span>
+          <input type="number" id="recentCount" min="0" step="5">
+        </div>
+
+        <label class="setting-row">
+          <span>顶部暂停优化</span>
+          <input type="checkbox" id="pauseNearTop" checked>
+        </label>
+
+        <label class="setting-row">
+          <span>实验性 CSS containment</span>
+          <input type="checkbox" id="experimentalContainmentEnabled">
+        </label>
+      </div>
+    </div>
+
+    <button class="section-toggle" data-section-toggle="branchSection" aria-expanded="true">Branch Map</button>
+    <div id="branchSection" class="section-body">
+      <div class="settings-group">
+        <label class="setting-row">
+          <span>Auto scan branch relationships</span>
+          <input type="checkbox" id="branchMapAutoScanEnabled" checked>
+        </label>
       </div>
 
-      <div class="setting-row">
-        <span>视口占比阈值</span>
-        <input type="number" id="minViewportRatioToCollapse" min="0.1" max="2" step="0.05">
+      <div class="actions actions-stack">
+        <button id="openBranchMap">Open Branch Map</button>
+        <button id="runScanNow">Run scan now</button>
       </div>
 
-      <div class="setting-row">
-        <span>最小高度(px)</span>
-        <input type="number" id="minRenderedHeightToCollapsePx" min="100" step="50">
+      <div class="actions actions-stack">
+        <button id="exportMemory">Export Memory</button>
+        <button id="importMemory">Import Memory</button>
+        <button id="cleanGhosts">Clean Invalid Ghosts</button>
+        <button id="resetGenealogy" class="danger">Reset Genealogy Graph</button>
       </div>
 
-      <div class="setting-row">
-        <span>最小字符数(兜底)</span>
-        <input type="number" id="minCharsToCollapse" min="500" step="500">
+      <input type="file" id="importFile" accept=".json,application/json" hidden>
+
+      <div id="previewPanel" class="preview-panel" hidden>
+        <textarea id="previewText" readonly></textarea>
+        <div class="actions">
+          <button id="previewConfirm">Confirm</button>
+          <button id="previewCancel">Cancel</button>
+        </div>
       </div>
 
-      <div class="setting-row">
-        <span>最近N条不做重型优化</span>
-        <input type="number" id="recentCount" min="0" step="5">
+      <div id="genealogyStats" class="status-box"></div>
+    </div>
+
+    <button class="section-toggle" data-section-toggle="advancedSection" aria-expanded="false">Advanced / Diagnostics</button>
+    <div id="advancedSection" class="section-body" hidden>
+      <div class="settings-group">
+        <label class="setting-row">
+          <span>Show status badge</span>
+          <input type="checkbox" id="showStatusBadge">
+        </label>
+
+        <label class="setting-row">
+          <span>Show diagnostics</span>
+          <input type="checkbox" id="showBranchDiagnostics">
+        </label>
       </div>
 
-      <label class="setting-row">
-        <span>顶部暂停优化</span>
-        <input type="checkbox" id="pauseNearTop" checked>
-      </label>
+      <div class="actions actions-stack">
+        <button id="copyDiagnostics">Copy diagnostics</button>
+      </div>
 
-      <label class="setting-row">
-        <span>显示状态角标</span>
-        <input type="checkbox" id="showStatusBadge" checked>
-      </label>
-
-      <label class="setting-row">
-        <span>实验性 CSS containment</span>
-        <input type="checkbox" id="experimentalContainmentEnabled">
-      </label>
+      <textarea id="diagnosticsText" class="diagnostics-box" readonly></textarea>
+      <div id="status" class="status-box"></div>
     </div>
 
     <div class="actions">
@@ -71,8 +127,6 @@
       <button id="disable">禁用插件</button>
       <button id="reload">刷新页面</button>
     </div>
-
-    <div id="status" class="status-box"></div>
   </div>
 
   <script src="popup.ts" type="module"></script>

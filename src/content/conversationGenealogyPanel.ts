@@ -2,20 +2,30 @@ import { CLASS_NAMES, DATA_ATTRS } from '../shared/constants';
 import {
   ConversationGenealogyGraph,
   CurrentConversation,
+  GenealogyMemoryCleanReport,
+  GenealogyMemoryImportReport,
   GenealogyDiagnostics,
   HydratedConversationNode,
   SidebarCatalogEntry,
 } from '../shared/conversationGenealogyTypes';
 import {
+  cleanInvalidGhostNodes,
+  createGenealogyMemoryFilename,
   canRenderHydratedNode,
+  exportGenealogyMemory,
   getRenderableNodeIds,
   hydrateNode,
   isAutoBranchGhostNode,
   isValidConversationUrl,
   isVerifiedIdSource,
+  loadGenealogyGraph,
+  parseGenealogyMemoryImport,
+  reconcileImportedGenealogyGraph,
   resetGenealogyGraph,
+  saveGenealogyGraph,
   updateConversationNodeNote,
 } from './conversationGenealogyStore';
+import { buildCleanSummary, buildDiagnosticsText, buildImportSummary } from '../shared/genealogySummaries';
 import {
   getCurrentConversation,
   scanSidebarCatalog,
@@ -38,6 +48,14 @@ let lastCurrentConversation: CurrentConversation = {
   idSource: 'unknown',
 };
 let expandedNodeIds = new Set<string>();
+let pendingImportState: {
+  graph: ConversationGenealogyGraph;
+  summaryText: string;
+} | null = null;
+let pendingCleanState: {
+  graph: ConversationGenealogyGraph;
+  summaryText: string;
+} | null = null;
 
 const MAP_UI_STORAGE_KEY = 'longconv_genealogy_map_ui';
 const MAP_SCALE_MIN = 0.4;
@@ -74,6 +92,7 @@ interface MapViewState {
   tooltipNodeId: string | null;
   editingNoteForId: string | null;
   pendingNoteValue: string;
+  focusConversationId: string | null;
 }
 
 interface MapTreeNode {
@@ -178,34 +197,39 @@ async function openPanel(): Promise<void> {
   genealogyPanel.appendChild(header);
 
   const btnRow = document.createElement('div');
-  btnRow.style.cssText = 'display:flex;gap:8px;padding:0 16px;flex-wrap:wrap;';
-  const scanBtn = makeActionButton('Scan current conversation', handleScan, 'flex:1 1 100%;margin:12px 0 0 0;');
-  const resetBtn = makeActionButton('Reset genealogy graph', handleReset, 'flex:1 1 auto;margin:8px 0 0 0;font-size:11px;');
-  const mapBtn = makeActionButton('Open Map View', handleOpenMapView, 'flex:1 1 auto;margin:8px 0 0 0;font-size:11px;');
-  btnRow.appendChild(scanBtn);
-  btnRow.appendChild(resetBtn);
+  btnRow.style.cssText = 'display:flex;gap:8px;padding:0 16px;flex-wrap:wrap;align-items:center;';
+  const mapBtn = makeActionButton('Open Current Map', handleOpenMapView, 'flex:1 1 auto;margin:12px 0 0 0;font-size:11px;');
+  const scanBtn = document.createElement('button');
+  scanBtn.className = CLASS_NAMES.branchPanelClose;
+  scanBtn.textContent = '↻';
+  scanBtn.title = 'Run scan now';
+  scanBtn.style.cssText = 'margin-top:12px;border:1px solid var(--longconv-btn-border);';
+  scanBtn.addEventListener('click', () => {
+    void handleScan();
+  });
   btnRow.appendChild(mapBtn);
+  btnRow.appendChild(scanBtn);
   genealogyPanel.appendChild(btnRow);
+
+  const toolbarHint = document.createElement('div');
+  toolbarHint.className = CLASS_NAMES.branchTreeHint;
+  toolbarHint.textContent = 'Browse the branch tree here. Advanced management in extension popup.';
+  genealogyPanel.appendChild(toolbarHint);
 
   const hint = document.createElement('div');
   hint.className = CLASS_NAMES.branchTreeHint;
-  hint.textContent = 'Observed only: this map contains conversations you have scanned or opened with the extension enabled.';
+  hint.textContent = 'Current: loading scan state... Manage export, import, cleanup, and reset in the extension popup.';
   genealogyPanel.appendChild(hint);
 
   const treeContainer = document.createElement('div');
   treeContainer.className = CLASS_NAMES.branchTree;
   genealogyPanel.appendChild(treeContainer);
 
-  const diagContainer = document.createElement('div');
-  diagContainer.className = 'longconv-branch-diagnostics';
-  diagContainer.setAttribute(DATA_ATTRS.inserted, '1');
-  genealogyPanel.appendChild(diagContainer);
-
   document.body.appendChild(genealogyPanel);
   panelOpen = true;
 
   renderTree(graph, treeContainer, sidebarCatalog, currentConversation);
-  renderDiagnostics(diagnostics, diagContainer);
+  updatePanelHint(genealogyPanel, diagnostics);
 }
 
 export function closePanel(): void {
@@ -241,6 +265,9 @@ async function handleScan(): Promise<void> {
 }
 
 async function handleReset(): Promise<void> {
+  if (!window.confirm('This will clear local genealogy memory. You may want to export a backup first.\n\n这会清空本地分支图谱记忆。建议先导出备份。')) {
+    return;
+  }
   await resetGenealogyGraph();
   expandedNodeIds.clear();
   const { graph, diagnostics, sidebarCatalog, currentConversation } = await updateConversationGenealogy();
@@ -255,7 +282,112 @@ async function handleReset(): Promise<void> {
 
 function handleOpenMapView(): void {
   if (!lastGraph) return;
-  openMapView(lastGraph, lastSidebarCatalog, lastCurrentConversation);
+  openMapView(lastGraph, lastSidebarCatalog, lastCurrentConversation, lastCurrentConversation.conversationId);
+}
+
+async function handleExportMemory(): Promise<void> {
+  const { graph } = await loadGenealogyGraph();
+  const exportData = exportGenealogyMemory(graph, {
+    catalog: lastSidebarCatalog,
+    currentConversation: lastCurrentConversation,
+  }, await readMapUiSettings());
+  const content = JSON.stringify(exportData, null, 2);
+  const blob = new Blob([content], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = createGenealogyMemoryFilename();
+  anchor.click();
+  URL.revokeObjectURL(url);
+  showHint('Genealogy memory exported.');
+}
+
+async function handleImportMemory(): Promise<void> {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    void readImportFile(file);
+  });
+  input.click();
+}
+
+async function readImportFile(file: File): Promise<void> {
+  try {
+    pendingCleanState = null;
+    const raw = await file.text();
+    const parsed = parseGenealogyMemoryImport(raw);
+    const { graph: currentGraph } = await loadGenealogyGraph();
+    const result = reconcileImportedGenealogyGraph(parsed.graph, currentGraph, {
+      catalog: lastSidebarCatalog,
+      currentConversation: lastCurrentConversation,
+    });
+    pendingImportState = {
+      graph: result.graph,
+      summaryText: buildImportSummary(result.report),
+    };
+    renderPreview({ kind: 'import', report: result.report });
+  } catch (error) {
+    pendingImportState = null;
+    renderPreview({ kind: 'error', message: error instanceof Error ? error.message : 'Import failed.' });
+  }
+}
+
+async function handleConfirmImport(): Promise<void> {
+  if (!pendingImportState) return;
+  await saveGenealogyGraph(pendingImportState.graph);
+  pendingImportState = null;
+  pendingCleanState = null;
+  const { graph, diagnostics, sidebarCatalog, currentConversation } = await updateConversationGenealogy();
+  lastGraph = graph;
+  lastDiagnostics = diagnostics;
+  lastSidebarCatalog = sidebarCatalog;
+  lastCurrentConversation = currentConversation;
+  seedExpandedState(graph, sidebarCatalog, currentConversation);
+  renderPreview(null);
+  refreshPanel(graph, diagnostics, sidebarCatalog, currentConversation);
+  showHint('Genealogy memory imported.');
+}
+
+function handleCancelImport(): void {
+  pendingImportState = null;
+  renderPreview(null);
+}
+
+async function handleConfirmClean(): Promise<void> {
+  if (!pendingCleanState) return;
+  await saveGenealogyGraph(pendingCleanState.graph);
+  pendingCleanState = null;
+  pendingImportState = null;
+  const refreshed = await updateConversationGenealogy();
+  lastGraph = refreshed.graph;
+  lastDiagnostics = refreshed.diagnostics;
+  lastSidebarCatalog = refreshed.sidebarCatalog;
+  lastCurrentConversation = refreshed.currentConversation;
+  seedExpandedState(refreshed.graph, refreshed.sidebarCatalog, refreshed.currentConversation);
+  renderPreview(null);
+  refreshPanel(refreshed.graph, refreshed.diagnostics, refreshed.sidebarCatalog, refreshed.currentConversation);
+}
+
+function handleCancelClean(): void {
+  pendingCleanState = null;
+  renderPreview(null);
+}
+
+async function handleCleanInvalidGhosts(): Promise<void> {
+  const { graph } = await loadGenealogyGraph();
+  pendingImportState = null;
+  const result = cleanInvalidGhostNodes(graph, {
+    catalog: lastSidebarCatalog,
+    currentConversation: lastCurrentConversation,
+  });
+  pendingCleanState = {
+    graph: result.graph,
+    summaryText: buildCleanSummary(result.report),
+  };
+  renderPreview({ kind: 'clean', report: result.report });
 }
 
 function refreshPanel(
@@ -267,9 +399,18 @@ function refreshPanel(
   if (!genealogyPanel) return;
   const treeContainer = genealogyPanel.querySelector(`.${CLASS_NAMES.branchTree}`);
   if (treeContainer) renderTree(graph, treeContainer as HTMLElement, sidebarCatalog, currentConversation);
-  const diagContainer = genealogyPanel.querySelector('.longconv-branch-diagnostics');
-  if (diagContainer) renderDiagnostics(diagnostics, diagContainer as HTMLElement);
+  updatePanelHint(genealogyPanel, diagnostics);
   if (genealogyMapModal) openMapView(graph, sidebarCatalog, currentConversation);
+}
+
+function updatePanelHint(panel: HTMLElement, diagnostics: GenealogyDiagnostics): void {
+  const hints = panel.querySelectorAll(`.${CLASS_NAMES.branchTreeHint}`);
+  const hint = hints.item(1) as HTMLElement | null;
+  if (!hint) return;
+  let status = 'Current: scanned';
+  if (!diagnostics.parentMarker.text) status = 'Current: no branch marker';
+  if (diagnostics.errors.length > 0) status = 'Current: scanned with debug notes';
+  hint.textContent = `${status}. Manage export, import, cleanup, and reset in the extension popup.`;
 }
 
 function getHydratedMainTreeNodes(
@@ -415,6 +556,22 @@ function renderNodeRow(
   main.appendChild(meta);
   content.appendChild(toggle);
   content.appendChild(main);
+  const mapIconBtn = document.createElement('button');
+  mapIconBtn.className = CLASS_NAMES.branchToggle;
+  mapIconBtn.textContent = 'M';
+  mapIconBtn.title = 'Open Map View from this branch';
+  mapIconBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openMapView(graph, sidebarCatalog, {
+      valid: true,
+      conversationId: node.conversationId,
+      title: node.title,
+      url: node.url,
+      normalizedTitle: node.normalizedTitle,
+      idSource: node.idSource === 'unknown' ? 'current-url' : 'current-url',
+    }, node.conversationId);
+  });
+  content.appendChild(mapIconBtn);
   row.appendChild(content);
   container.appendChild(row);
 
@@ -492,23 +649,14 @@ function isAncestorOrDescendantOfActive(
 function openMapView(
   graph: ConversationGenealogyGraph,
   sidebarCatalog: SidebarCatalogEntry[],
-  currentConversation: CurrentConversation
+  currentConversation: CurrentConversation,
+  focusConversationId?: string
 ): void {
   closeMapView();
-  const mainNodes = getHydratedMainTreeNodes(graph, sidebarCatalog, currentConversation);
-  const mainIds = new Set(mainNodes.map((node) => node.conversationId));
-  const childrenMap = buildChildrenMap(graph, mainIds, sidebarCatalog, currentConversation);
-  const nodesWithIncoming = new Set(
-    graph.edges
-      .filter((edge) => mainIds.has(edge.toConversationId) && mainIds.has(edge.fromConversationId))
-      .map((edge) => edge.toConversationId)
-  );
-  const roots = mainNodes.filter((node) => !nodesWithIncoming.has(node.conversationId));
-
-  if (roots.length === 0) {
-    showHint('No connected conversations found for map view.');
-    return;
-  }
+  const mapContext = buildMapViewGraphForFocus(graph, focusConversationId, sidebarCatalog, currentConversation);
+  const contextGraph = mapContext.graph;
+  const roots = mapContext.roots;
+  const childrenMap = mapContext.childrenMap;
 
   genealogyMapModal = document.createElement('div');
   genealogyMapModal.className = CLASS_NAMES.branchMapBackdrop;
@@ -533,36 +681,6 @@ function openMapView(
   header.appendChild(closeBtn);
   card.appendChild(header);
 
-  const toolbar = document.createElement('div');
-  toolbar.className = CLASS_NAMES.branchMapToolbar;
-
-  const toolbarActions = document.createElement('div');
-  toolbarActions.className = CLASS_NAMES.branchMapToolbarActions;
-
-  const previewToggleWrap = document.createElement('label');
-  previewToggleWrap.className = CLASS_NAMES.branchMapToggle;
-  const previewToggle = document.createElement('input');
-  previewToggle.type = 'checkbox';
-  previewToggle.checked = false;
-  const previewLabel = document.createElement('span');
-  previewLabel.textContent = 'Show note previews';
-  previewToggleWrap.appendChild(previewToggle);
-  previewToggleWrap.appendChild(previewLabel);
-
-  const fitBtn = document.createElement('button');
-  fitBtn.className = CLASS_NAMES.branchRecordBtn;
-  fitBtn.textContent = 'Fit';
-
-  const resetBtn = document.createElement('button');
-  resetBtn.className = CLASS_NAMES.branchRecordBtn;
-  resetBtn.textContent = 'Reset';
-
-  toolbarActions.appendChild(previewToggleWrap);
-  toolbarActions.appendChild(fitBtn);
-  toolbarActions.appendChild(resetBtn);
-  toolbar.appendChild(toolbarActions);
-  card.appendChild(toolbar);
-
   const viewport = document.createElement('div');
   viewport.className = CLASS_NAMES.branchMapViewport;
   const canvas = document.createElement('div');
@@ -578,6 +696,19 @@ function openMapView(
 
   const controls = document.createElement('div');
   controls.className = CLASS_NAMES.branchMapControls;
+  const notesToggle = document.createElement('label');
+  notesToggle.className = CLASS_NAMES.branchMapToggle;
+  notesToggle.setAttribute('data-map-interactive', '1');
+  const previewToggle = document.createElement('input');
+  previewToggle.type = 'checkbox';
+  previewToggle.checked = false;
+  previewToggle.setAttribute('data-map-interactive', '1');
+  const previewLabel = document.createElement('span');
+  previewLabel.textContent = 'Notes';
+  previewLabel.setAttribute('data-map-interactive', '1');
+  notesToggle.appendChild(previewToggle);
+  notesToggle.appendChild(previewLabel);
+  controls.appendChild(notesToggle);
   controls.appendChild(makeMapControlButton('+', () => adjustMapZoom(1)));
   controls.appendChild(makeMapControlButton('−', () => adjustMapZoom(-1)));
   controls.appendChild(makeMapControlButton('Reset', () => resetMapTransform()));
@@ -626,16 +757,151 @@ function openMapView(
     tooltipNodeId: null,
     editingNoteForId: null,
     pendingNoteValue: '',
+    focusConversationId: mapContext.focusConversationId,
   };
 
   syncMapUiSettings().then(() => {
-    if (!mapViewState || !mapViewDomRefs || !lastGraph) return;
+    if (!mapViewState || !mapViewDomRefs) return;
     mapViewDomRefs.toolbarToggle.checked = mapViewState.showNotePreviews;
-    initializeMapCollapseState(graph, childrenMap, currentConversation, roots);
-    attachMapViewportEvents(graph, childrenMap, currentConversation, roots);
-    renderMapView(graph, childrenMap, currentConversation, roots);
+    initializeMapCollapseState(contextGraph, childrenMap, currentConversation, roots);
+    attachMapViewportEvents(contextGraph, childrenMap, currentConversation, roots);
+    renderMapView(contextGraph, childrenMap, currentConversation, roots);
     fitMapToViewport();
   });
+}
+
+function buildMapViewGraphForFocus(
+  graph: ConversationGenealogyGraph,
+  focusConversationId: string | undefined,
+  sidebarCatalog: SidebarCatalogEntry[],
+  currentConversation: CurrentConversation
+): {
+  graph: ConversationGenealogyGraph;
+  roots: HydratedConversationNode[];
+  childrenMap: Map<string, HydratedConversationNode[]>;
+  focusConversationId: string | null;
+} {
+  const requestedFocusId = focusConversationId || (currentConversation.valid ? currentConversation.conversationId : '') || graph.currentConversationId || '';
+  const adjacency = new Map<string, Set<string>>();
+  const edgeNodeIds = new Set<string>();
+
+  for (const edge of graph.edges) {
+    edgeNodeIds.add(edge.fromConversationId);
+    edgeNodeIds.add(edge.toConversationId);
+    if (!adjacency.has(edge.fromConversationId)) adjacency.set(edge.fromConversationId, new Set());
+    if (!adjacency.has(edge.toConversationId)) adjacency.set(edge.toConversationId, new Set());
+    adjacency.get(edge.fromConversationId)!.add(edge.toConversationId);
+    adjacency.get(edge.toConversationId)!.add(edge.fromConversationId);
+  }
+
+  const contextGraph: ConversationGenealogyGraph = {
+    schemaVersion: graph.schemaVersion,
+    nodes: {},
+    edges: [],
+    currentConversationId: requestedFocusId || currentConversation.conversationId,
+    updatedAt: graph.updatedAt,
+  };
+
+  if (requestedFocusId && edgeNodeIds.has(requestedFocusId)) {
+    const componentIds = new Set<string>();
+    const queue = [requestedFocusId];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (componentIds.has(id)) continue;
+      componentIds.add(id);
+      for (const neighbor of adjacency.get(id) ?? []) {
+        if (!componentIds.has(neighbor)) queue.push(neighbor);
+      }
+    }
+
+    for (const id of componentIds) {
+      const hydrated = hydrateNode(id, { catalog: sidebarCatalog, currentConversation }, graph);
+      const metadata = graph.nodes[id];
+      if (hydrated && metadata && canRenderHydratedNode(hydrated, graph, { catalog: sidebarCatalog, currentConversation })) {
+        contextGraph.nodes[id] = { ...metadata, isCurrent: id === currentConversation.conversationId };
+      }
+    }
+    contextGraph.edges = graph.edges.filter(
+      (edge) => componentIds.has(edge.fromConversationId) && componentIds.has(edge.toConversationId)
+    );
+  } else if (requestedFocusId) {
+    const hydrated = hydrateNode(requestedFocusId, { catalog: sidebarCatalog, currentConversation }, graph);
+    const metadata = graph.nodes[requestedFocusId];
+    if (metadata) {
+      contextGraph.nodes[requestedFocusId] = { ...metadata, isCurrent: requestedFocusId === currentConversation.conversationId };
+    } else if (hydrated) {
+      contextGraph.nodes[requestedFocusId] = {
+        conversationId: hydrated.conversationId,
+        title: hydrated.title,
+        url: hydrated.url,
+        normalizedTitle: hydrated.normalizedTitle,
+        idSource: hydrated.idSource,
+        aliases: hydrated.aliases,
+        source: hydrated.source,
+        firstSeenAt: hydrated.firstSeenAt,
+        lastSeenAt: hydrated.lastSeenAt,
+        isCurrent: requestedFocusId === currentConversation.conversationId,
+        unresolved: hydrated.unresolved,
+        stale: hydrated.stale,
+        missing: hydrated.missing,
+        invalid: hydrated.invalid,
+        label: hydrated.label,
+        note: hydrated.note,
+      };
+    } else if (currentConversation.valid) {
+      contextGraph.nodes[requestedFocusId] = {
+        conversationId: requestedFocusId,
+        title: currentConversation.title,
+        url: currentConversation.url,
+        normalizedTitle: currentConversation.normalizedTitle,
+        idSource: 'current-url',
+        source: 'current-page',
+        firstSeenAt: Date.now(),
+        lastSeenAt: Date.now(),
+        isCurrent: true,
+        unresolved: false,
+        stale: false,
+        missing: false,
+        invalid: false,
+        aliases: [],
+      };
+    }
+  }
+
+  const contextCatalog = sidebarCatalog.filter((entry) => entry.conversationId in contextGraph.nodes);
+  const effectiveCurrentConversation = currentConversation.valid && currentConversation.conversationId in contextGraph.nodes
+    ? currentConversation
+    : requestedFocusId && requestedFocusId in contextGraph.nodes
+      ? {
+          valid: true,
+          conversationId: requestedFocusId,
+          title: contextGraph.nodes[requestedFocusId].title,
+          url: contextGraph.nodes[requestedFocusId].url,
+          normalizedTitle: contextGraph.nodes[requestedFocusId].normalizedTitle,
+          idSource: 'current-url' as const,
+        }
+      : currentConversation;
+  const mainNodes = getHydratedMainTreeNodes(contextGraph, contextCatalog, effectiveCurrentConversation);
+  const mainIds = new Set(mainNodes.map((node) => node.conversationId));
+  const childrenMap = buildChildrenMap(contextGraph, mainIds, contextCatalog, effectiveCurrentConversation);
+  const nodesWithIncoming = new Set(
+    contextGraph.edges
+      .filter((edge) => mainIds.has(edge.toConversationId) && mainIds.has(edge.fromConversationId))
+      .map((edge) => edge.toConversationId)
+  );
+  let roots = mainNodes.filter((node) => !nodesWithIncoming.has(node.conversationId));
+
+  if (roots.length === 0 && requestedFocusId && requestedFocusId in contextGraph.nodes) {
+    const focusNode = hydrateNode(requestedFocusId, { catalog: contextCatalog, currentConversation: effectiveCurrentConversation }, contextGraph);
+    if (focusNode) roots = [focusNode];
+  }
+
+  return {
+    graph: contextGraph,
+    roots,
+    childrenMap,
+    focusConversationId: requestedFocusId || null,
+  };
 }
 
 function closeMapView(): void {
@@ -664,6 +930,20 @@ async function syncMapUiSettings(): Promise<void> {
     mapViewState.showNotePreviews = !!raw?.showNotePreviews;
   } catch {
     mapViewState.showNotePreviews = false;
+  }
+}
+
+async function readMapUiSettings(): Promise<GenealogyMapUiState> {
+  try {
+    const result = await chrome.storage.local.get(MAP_UI_STORAGE_KEY);
+    const raw = result[MAP_UI_STORAGE_KEY] as Partial<GenealogyMapUiState> | undefined;
+    return {
+      showNotePreviews: !!raw?.showNotePreviews,
+    };
+  } catch {
+    return {
+      showNotePreviews: false,
+    };
   }
 }
 
@@ -885,7 +1165,7 @@ function makeNodeBadge(label: string): HTMLElement {
 
 function buildMapMeta(node: HydratedConversationNode): string {
   const parts: string[] = [node.source, formatRelativeTime(node.lastSeenAt)];
-  if (node.missing || node.stale) parts.unshift('missing from sidebar');
+  if (node.stale) parts.unshift('stale / unverified');
   return parts.join(' · ');
 }
 
@@ -1358,7 +1638,7 @@ function navigateToConversation(node: HydratedConversationNode): void {
   }
   if (target.url) {
     console.debug('[LongConv Genealogy] navigate', node.title, target.url);
-    window.location.href = target.url;
+    window.location.assign(target.url);
   }
 }
 
@@ -1366,57 +1646,59 @@ function renderDiagnostics(d: GenealogyDiagnostics, container: HTMLElement): voi
   container.innerHTML = '';
   const el = document.createElement('div');
   el.style.cssText = 'padding:8px 16px;font-size:11px;color:#888;border-top:1px solid var(--longconv-btn-border);font-family:monospace;white-space:pre-wrap;word-break:break-all;max-height:240px;overflow-y:auto;';
+  el.textContent = buildDiagnosticsText(d);
+  container.appendChild(el);
+}
 
-  let text =
-    '--- Genealogy Diagnostics ---\n' +
-    `Current title: ${d.currentTitle}\n` +
-    `Current ID: ${d.currentConversationId}\n` +
-    `Sidebar catalog count: ${d.sidebarCatalogCount}\n` +
-    `Renderable nodes: ${d.renderableNodeCount}\n` +
-    `Total stored nodes: ${d.totalStoredNodeCount}\n` +
-    `Edges: ${d.edgeCount}\n` +
-    `Unresolved: ${d.unresolvedCount}\n` +
-    `Migration: ${d.migration.migrated ? `yes (dropped nodes=${d.migration.droppedLegacyNodes}, edges=${d.migration.droppedLegacyEdges})` : 'no'}\n` +
-    `\nParent marker:\n` +
-    `  text: ${d.parentMarker.text || '(none)'}\n` +
-    `  parentTitle: ${d.parentMarker.parentTitle || '(none)'}\n` +
-    `  confidence: ${d.parentMarker.confidence || '(none)'}\n` +
-    `  rejectedReason: ${d.parentMarker.rejectedReason || 'none'}\n` +
-    `\nParent resolution:\n` +
-    `  resolvedParentId: ${d.parentResolution.resolvedParentId || '(none)'}\n` +
-    `  resolvedParentTitle: ${d.parentResolution.resolvedParentTitle || '(none)'}\n` +
-    `  matchType: ${d.parentResolution.matchType}\n` +
-    `  duplicateCount: ${d.parentResolution.duplicateCount}\n` +
-    `\nRename / alias:\n` +
-    `  nodeConversationId: ${d.renameInfo.nodeConversationId}\n` +
-    `  currentTitle: ${d.renameInfo.currentTitle}\n` +
-    `  previousAliases: ${d.renameInfo.previousAliases.length > 0 ? d.renameInfo.previousAliases.join(', ') : '(none)'}\n` +
-    `  titleChanged: ${d.renameInfo.titleChanged ? 'yes' : 'no'}\n` +
-    `\nPlaceholder merge:\n` +
-    `  placeholdersBefore: ${d.placeholderMerge.placeholdersBefore}\n` +
-    `  placeholdersMerged: ${d.placeholderMerge.placeholdersMerged}\n` +
-    `  placeholdersAfter: ${d.placeholderMerge.placeholdersAfter}\n` +
-    `  mergeDetails: ${d.placeholderMerge.mergeDetails.length > 0 ? d.placeholderMerge.mergeDetails.join('; ') : '(none)'}\n` +
-    `\nGhost cleanup:\n` +
-    `  removedGhostsCount: ${d.ghostCleanup.removedGhostsCount}\n` +
-    `  removedGhostTitles: ${d.ghostCleanup.removedGhostTitles.length > 0 ? d.ghostCleanup.removedGhostTitles.join(', ') : '(none)'}\n` +
-    `  skippedProtectedGhosts: ${d.ghostCleanup.skippedProtectedGhosts.length > 0 ? d.ghostCleanup.skippedProtectedGhosts.join(', ') : '(none)'}\n` +
-    `\nAuto branch ghosts:\n` +
-    `  detected: ${d.autoBranchGhosts.detectedCount}\n` +
-    `  titles: ${d.autoBranchGhosts.titles.length > 0 ? d.autoBranchGhosts.titles.join(', ') : '(none)'}\n` +
-    `  merged: ${d.autoBranchGhosts.mergedCount}\n` +
-    `  removed: ${d.autoBranchGhosts.removedCount}\n` +
-    `  mergeDetails: ${d.autoBranchGhosts.mergeDetails.length > 0 ? d.autoBranchGhosts.mergeDetails.join('; ') : '(none)'}\n` +
-    `  skipped: ${d.autoBranchGhosts.skippedReasons.length > 0 ? d.autoBranchGhosts.skippedReasons.join('; ') : '(none)'}`;
+function renderPreview(
+  state:
+    | { kind: 'import'; report: GenealogyMemoryImportReport }
+    | { kind: 'clean'; report: GenealogyMemoryCleanReport }
+    | { kind: 'error'; message: string }
+    | null
+): void {
+  if (!genealogyPanel) return;
+  const container = genealogyPanel.querySelector('.longconv-genealogy-preview') as HTMLElement | null;
+  if (!container) return;
 
-  if (d.edgeCount === 0) text += '\n\nNo parent edge detected for current conversation.';
-  if (d.errors.length > 0) {
-    text += '\n\nErrors:';
-    for (const err of d.errors) text += `\n  - ${err}`;
+  container.innerHTML = '';
+  if (!state) {
+    container.hidden = true;
+    return;
   }
 
-  el.textContent = text;
-  container.appendChild(el);
+  container.hidden = false;
+  const pre = document.createElement('pre');
+  pre.className = 'longconv-genealogy-preview-text';
+  pre.textContent =
+    state.kind === 'import'
+      ? buildImportSummary(state.report)
+      : state.kind === 'clean'
+        ? buildCleanSummary(state.report)
+        : state.message;
+  container.appendChild(pre);
+
+  if (state.kind === 'error') return;
+
+  const actions = document.createElement('div');
+  actions.className = 'longconv-genealogy-preview-actions';
+  const confirmBtn = makeActionButton(
+    state.kind === 'import' ? 'Confirm Import' : 'Confirm Clean',
+    state.kind === 'import' ? handleConfirmImport : handleConfirmClean,
+    'flex:1 1 auto;margin:0;font-size:11px;'
+  );
+  const cancelBtn = makeActionButton(
+    'Cancel',
+    state.kind === 'import' ? handleCancelImport : handleCancelClean,
+    'flex:1 1 auto;margin:0;font-size:11px;'
+  );
+  if (state.kind === 'import' && state.report.importedNodeCount === 0 && state.report.importedEdgeCount === 0) {
+    confirmBtn.disabled = true;
+    confirmBtn.title = 'Empty memory import cannot overwrite the current genealogy graph.';
+  }
+  actions.appendChild(confirmBtn);
+  actions.appendChild(cancelBtn);
+  container.appendChild(actions);
 }
 
 function formatRelativeTime(ts: number): string {
@@ -1449,6 +1731,55 @@ export async function initGenealogySystem(): Promise<void> {
   createGenealogyButton();
 }
 
+export function setLatestGenealogySnapshot(
+  graph: ConversationGenealogyGraph,
+  diagnostics: GenealogyDiagnostics,
+  sidebarCatalog: SidebarCatalogEntry[],
+  currentConversation: CurrentConversation
+): void {
+  lastGraph = graph;
+  lastDiagnostics = diagnostics;
+  lastSidebarCatalog = sidebarCatalog;
+  lastCurrentConversation = currentConversation;
+}
+
+export function getLatestGenealogyDiagnostics(): GenealogyDiagnostics | null {
+  return lastDiagnostics;
+}
+
+export async function openBranchMapView(): Promise<void> {
+  if (!lastGraph) {
+    const { graph, diagnostics, sidebarCatalog, currentConversation } = await updateConversationGenealogy();
+    setLatestGenealogySnapshot(graph, diagnostics, sidebarCatalog, currentConversation);
+  }
+  handleOpenMapView();
+}
+
+export async function refreshGenealogyFromStorage(): Promise<void> {
+  const { graph } = await loadGenealogyGraph();
+  const sidebarCatalog = scanSidebarCatalog();
+  const currentConversation = getCurrentConversation(sidebarCatalog);
+  const diagnostics = lastDiagnostics ?? {
+    currentConversationId: currentConversation.conversationId,
+    currentTitle: currentConversation.title,
+    sidebarCatalogCount: sidebarCatalog.length,
+    renderableNodeCount: 0,
+    totalStoredNodeCount: Object.keys(graph.nodes).length,
+    edgeCount: graph.edges.length,
+    unresolvedCount: 0,
+    parentMarker: { text: '', parentTitle: '', confidence: '', rejectedReason: '' },
+    parentResolution: { resolvedParentId: '', resolvedParentTitle: '', matchType: 'none', duplicateCount: 0 },
+    renameInfo: { nodeConversationId: currentConversation.conversationId, currentTitle: currentConversation.title, previousAliases: [], titleChanged: false },
+    placeholderMerge: { placeholdersBefore: 0, placeholdersMerged: 0, placeholdersAfter: 0, mergeDetails: [] },
+    ghostCleanup: { removedGhostsCount: 0, removedGhostTitles: [], skippedProtectedGhosts: [] },
+    autoBranchGhosts: { detectedCount: 0, titles: [], mergedCount: 0, removedCount: 0, mergeDetails: [], skippedReasons: [] },
+    migration: { migrated: false, droppedLegacyNodes: 0, droppedLegacyEdges: 0 },
+    errors: [],
+  };
+  setLatestGenealogySnapshot(graph, diagnostics, sidebarCatalog, currentConversation);
+  if (genealogyMapModal) openMapView(graph, sidebarCatalog, currentConversation);
+}
+
 export function cleanupGenealogyUI(): void {
   closePanel();
   removeGenealogyButton();
@@ -1457,6 +1788,13 @@ export function cleanupGenealogyUI(): void {
 }
 
 export const __TEST__ = {
+  createGenealogyButton,
+  closePanel,
+  openBranchMapView,
+  buildMapViewGraphForFocus,
+  setLatestGenealogySnapshot,
+  openPanel,
+  updatePanelHint,
   isMainTreeNode,
   getHydratedMainTreeNodes,
   buildChildrenMap,
@@ -1476,6 +1814,12 @@ export const __TEST__ = {
   navigateToConversation,
   getNavigationTarget,
   buildNodeLabel,
+  buildImportSummary,
+  buildCleanSummary,
+  renderPreview,
+  readMapUiSettings,
+  handleCancelImport,
+  handleCancelClean,
   renderTree,
   hydrateNode,
   scanSidebarCatalog,

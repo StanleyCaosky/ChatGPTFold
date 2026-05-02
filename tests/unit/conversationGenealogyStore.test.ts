@@ -3,20 +3,29 @@ import {
   canRenderHydratedNode,
   cleanupGenealogyGraph,
   createEmptyGenealogyGraph,
+  exportGenealogyMemory,
   extractAutoBranchBaseTitle,
   GENEALOGY_SCHEMA_VERSION,
+  GENEALOGY_MEMORY_EXPORT_TYPE,
   hydrateNode,
   isAutoBranchGhostNode,
   isAutoBranchTitle,
+  isRealConversationId,
+  isSyntheticConversationId,
   isValidConversationUrl,
   isVerifiedIdSource,
   loadGenealogyGraph,
   makePlaceholderId,
   mergePlaceholderIntoRealNode,
   normalizeTitle,
+  parseGenealogyMemoryImport,
+  reconcileImportedGenealogyGraph,
+  isVerifiedConversationNode,
   resolveParentTitle,
   resolvePlaceholders,
+  cleanInvalidGhostNodes,
   saveGenealogyGraph,
+  isProtectedConversationNode,
   updateConversationNodeNote,
   upsertConversationEdge,
   upsertConversationNode,
@@ -56,6 +65,31 @@ function makeContext(catalog: SidebarCatalogEntry[] = [], currentConversation?: 
   };
 }
 
+function sidebarEntry(conversationId: string, title: string, isCurrent = false): SidebarCatalogEntry {
+  return {
+    conversationId,
+    title,
+    url: `https://chatgpt.com/c/${conversationId}`,
+    normalizedTitle: normalizeTitle(title),
+    lastSeenAt: 100,
+    idSource: 'sidebar-url',
+    isCurrent,
+  };
+}
+
+function addVerifiedNode(graph: ReturnType<typeof createEmptyGenealogyGraph>, conversationId: string, title: string) {
+  graph.nodes[conversationId] = {
+    conversationId,
+    idSource: 'sidebar-url',
+    title,
+    url: `https://chatgpt.com/c/${conversationId}`,
+    normalizedTitle: normalizeTitle(title),
+    source: 'metadata',
+    firstSeenAt: 100,
+    lastSeenAt: 100,
+  };
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
   Object.keys(store).forEach((key) => delete store[key]);
@@ -73,10 +107,42 @@ describe('helpers', () => {
   });
 
   it('validates conversation urls and verified id sources', () => {
-    expect(isValidConversationUrl('https://chatgpt.com/c/abc')).toBe(true);
+    expect(isValidConversationUrl('https://chatgpt.com/c/69f4c92c-92f8-83a4-af76-9e71fa69fa2f')).toBe(true);
     expect(isValidConversationUrl('https://chatgpt.com/')).toBe(false);
     expect(isVerifiedIdSource('current-url')).toBe(true);
     expect(isVerifiedIdSource('synthetic')).toBe(false);
+  });
+
+  it('treats WEB single-colon and lower-case ids as synthetic', () => {
+    expect(isSyntheticConversationId('WEB:70faa')).toBe(true);
+    expect(isSyntheticConversationId('WEB::70faa')).toBe(true);
+    expect(isSyntheticConversationId('web:70faa')).toBe(true);
+  });
+
+  it('accepts only real conversation ids and rejects WEB ids', () => {
+    expect(isRealConversationId('69f4c92c-92f8-83a4-af76-9e71fa69fa2f')).toBe(true);
+    expect(isRealConversationId('WEB:70faa19c-0634-4b85-865b-fe7a699ed94c')).toBe(false);
+  });
+
+  it('validates conversation urls by real id, not just /c/ prefix', () => {
+    expect(isValidConversationUrl('https://chatgpt.com/c/WEB:70faa')).toBe(false);
+    expect(isValidConversationUrl('https://chatgpt.com/c/69f4c92c-92f8-83a4-af76-9e71fa69fa2f')).toBe(true);
+  });
+
+  it('verifies current conversation by id even if title changed', () => {
+    expect(
+      isVerifiedConversationNode(
+        { conversationId: 'A2', url: 'https://chatgpt.com/c/A2', idSource: 'current-url' },
+        makeContext([], {
+          valid: true,
+          conversationId: 'A2',
+          title: 'Renamed title',
+          url: 'https://chatgpt.com/c/A2',
+          normalizedTitle: normalizeTitle('Renamed title'),
+          idSource: 'current-url',
+        })
+      )
+    ).toBe(true);
   });
 });
 
@@ -244,7 +310,7 @@ describe('hydrate and ghost cleanup', () => {
     const graph = createEmptyGenealogyGraph();
     graph.nodes['A'] = {
       conversationId: 'A',
-      idSource: 'sidebar-url',
+      idSource: 'unknown',
       title: 'A',
       url: 'https://chatgpt.com/c/A',
       normalizedTitle: 'a',
@@ -255,7 +321,7 @@ describe('hydrate and ghost cleanup', () => {
 
     const hydrated = hydrateNode('A', makeContext(), graph)!;
     expect(hydrated.stale).toBe(true);
-    expect(hydrated.missing).toBe(true);
+    expect(hydrated.missing).toBe(false);
     expect(canRenderHydratedNode(hydrated, graph, makeContext())).toBe(true);
   });
 
@@ -452,5 +518,601 @@ describe('storage', () => {
       lastSeenAt: 100,
     });
     expect(reloaded.nodes['conv-note'].note).toBe('remember this');
+  });
+});
+
+describe('genealogy memory export', () => {
+  it('excludes sidebar-only nodes and auto branch ghosts while preserving metadata', () => {
+    const graph = createEmptyGenealogyGraph();
+    graph.nodes['sidebarOnly'] = {
+      conversationId: 'sidebarOnly',
+      idSource: 'sidebar-url',
+      title: 'Sidebar Only',
+      url: 'https://chatgpt.com/c/sidebarOnly',
+      normalizedTitle: 'sidebar only',
+      source: 'sidebar',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    graph.nodes['A'] = {
+      conversationId: 'A',
+      idSource: 'sidebar-url',
+      title: 'A',
+      url: 'https://chatgpt.com/c/A',
+      normalizedTitle: 'a',
+      aliases: ['Alias A'],
+      label: 'keep label',
+      note: 'keep note',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    graph.nodes['B'] = {
+      conversationId: 'B',
+      idSource: 'current-url',
+      title: 'B',
+      url: 'https://chatgpt.com/c/B',
+      normalizedTitle: 'b',
+      source: 'current-page',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    graph.nodes['WEB::ghost'] = {
+      conversationId: 'WEB::ghost',
+      idSource: 'synthetic',
+      title: '分支·A',
+      url: 'https://chatgpt.com/',
+      normalizedTitle: normalizeTitle('分支·A'),
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    upsertConversationEdge(graph, {
+      fromConversationId: 'A',
+      toConversationId: 'B',
+      source: 'native-marker',
+      confidence: 'high',
+    });
+    upsertConversationEdge(graph, {
+      fromConversationId: 'A',
+      toConversationId: 'B',
+      source: 'native-marker',
+      confidence: 'high',
+    });
+    upsertConversationEdge(graph, {
+      fromConversationId: 'A',
+      toConversationId: 'WEB::ghost',
+      source: 'native-marker',
+      confidence: 'high',
+    });
+
+    const exported = exportGenealogyMemory(graph, makeContext([
+      {
+        conversationId: 'A',
+        title: 'A',
+        url: 'https://chatgpt.com/c/A',
+        normalizedTitle: 'a',
+        lastSeenAt: 100,
+        idSource: 'sidebar-url',
+        isCurrent: false,
+      },
+      {
+        conversationId: 'B',
+        title: 'B',
+        url: 'https://chatgpt.com/c/B',
+        normalizedTitle: 'b',
+        lastSeenAt: 100,
+        idSource: 'sidebar-url',
+        isCurrent: false,
+      },
+    ]), { showNotePreviews: true });
+
+    expect(exported.exportType).toBe(GENEALOGY_MEMORY_EXPORT_TYPE);
+    expect(exported.graph.nodes['sidebarOnly']).toBeUndefined();
+    expect(exported.graph.nodes['WEB::ghost']).toBeUndefined();
+    expect(exported.graph.edges).toHaveLength(1);
+    expect(exported.graph.nodes['A'].note).toBe('keep note');
+    expect(exported.graph.nodes['A'].label).toBe('keep label');
+    expect(exported.graph.nodes['A'].aliases).toContain('Alias A');
+    expect(JSON.stringify(exported)).not.toContain('message content');
+    expect(exported.ui?.showNotePreviews).toBe(true);
+  });
+
+  it('retains unresolved placeholder only when it has outgoing edge', () => {
+    const graph = createEmptyGenealogyGraph();
+    const keepId = makePlaceholderId('keep');
+    const dropId = makePlaceholderId('drop');
+    graph.nodes[keepId] = {
+      conversationId: keepId,
+      idSource: 'placeholder',
+      title: 'Keep',
+      url: '',
+      normalizedTitle: 'keep',
+      source: 'placeholder',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+      unresolved: true,
+    };
+    graph.nodes[dropId] = {
+      conversationId: dropId,
+      idSource: 'placeholder',
+      title: 'Drop',
+      url: '',
+      normalizedTitle: 'drop',
+      source: 'placeholder',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+      unresolved: true,
+    };
+    graph.nodes['child'] = {
+      conversationId: 'child',
+      idSource: 'current-url',
+      title: 'Child',
+      url: 'https://chatgpt.com/c/child',
+      normalizedTitle: 'child',
+      source: 'current-page',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    upsertConversationEdge(graph, {
+      fromConversationId: keepId,
+      toConversationId: 'child',
+      source: 'native-marker',
+      confidence: 'high',
+    });
+
+    const exported = exportGenealogyMemory(graph, makeContext());
+    expect(exported.graph.nodes[keepId]).toBeDefined();
+    expect(exported.graph.nodes[dropId]).toBeUndefined();
+  });
+});
+
+describe('genealogy memory import validate', () => {
+  it('rejects invalid JSON and invalid export structures', () => {
+    expect(() => parseGenealogyMemoryImport('{invalid')).toThrow('Invalid JSON file.');
+    expect(() => parseGenealogyMemoryImport(JSON.stringify({ exportType: 'wrong' }))).toThrow('Unsupported memory export type.');
+    expect(() => parseGenealogyMemoryImport(JSON.stringify({ exportType: GENEALOGY_MEMORY_EXPORT_TYPE, exportVersion: 2 }))).toThrow('Unsupported memory export version.');
+    expect(() => parseGenealogyMemoryImport(JSON.stringify({ exportType: GENEALOGY_MEMORY_EXPORT_TYPE, exportVersion: 1 }))).toThrow('Memory export is missing graph data.');
+    expect(() => parseGenealogyMemoryImport(JSON.stringify({ exportType: GENEALOGY_MEMORY_EXPORT_TYPE, exportVersion: 1, graph: { nodes: {}, edges: [{}] } }))).toThrow('Memory export edge is malformed.');
+  });
+
+  it('keeps script-like text as inert strings', () => {
+    const parsed = parseGenealogyMemoryImport(JSON.stringify({
+      exportType: GENEALOGY_MEMORY_EXPORT_TYPE,
+      exportVersion: 1,
+      appName: 'ChatGPTFold',
+      exportedAt: 1,
+      graphSchemaVersion: GENEALOGY_SCHEMA_VERSION,
+      graph: {
+        nodes: {
+          A: {
+            conversationId: 'A',
+            title: '<script>alert(1)</script>',
+            url: 'https://chatgpt.com/c/A',
+            note: '<img src=x onerror=alert(1)>',
+          },
+        },
+        edges: [],
+        updatedAt: 1,
+      },
+    }));
+
+    expect(parsed.graph.nodes['A'].title).toBe('<script>alert(1)</script>');
+    expect(parsed.graph.nodes['A'].note).toBe('<img src=x onerror=alert(1)>');
+  });
+});
+
+describe('genealogy memory reconcile and cleaning', () => {
+  it('rejects empty import overwrite', () => {
+    expect(() => reconcileImportedGenealogyGraph(createEmptyGenealogyGraph(), createEmptyGenealogyGraph(), makeContext())).toThrow(
+      'Empty memory import cannot overwrite the current genealogy graph.'
+    );
+  });
+
+  it('merges same conversationId, keeps local note, merges aliases, and prefers current sidebar title/url', () => {
+    const currentGraph = createEmptyGenealogyGraph();
+    currentGraph.nodes['A'] = {
+      conversationId: 'A',
+      idSource: 'sidebar-url',
+      title: 'Current A',
+      url: 'https://chatgpt.com/c/A',
+      normalizedTitle: normalizeTitle('Current A'),
+      aliases: ['Local Alias'],
+      note: 'local note',
+      label: 'local label',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    const importedGraph = createEmptyGenealogyGraph();
+    importedGraph.nodes['A'] = {
+      conversationId: 'A',
+      idSource: 'sidebar-url',
+      title: 'Imported A',
+      url: 'https://chatgpt.com/c/A-old',
+      normalizedTitle: normalizeTitle('Imported A'),
+      aliases: ['Imported Alias'],
+      note: 'imported note',
+      label: 'imported label',
+      source: 'metadata',
+      firstSeenAt: 90,
+      lastSeenAt: 200,
+    };
+
+    const result = reconcileImportedGenealogyGraph(importedGraph, currentGraph, makeContext([
+      {
+        conversationId: 'A',
+        title: 'Sidebar A',
+        url: 'https://chatgpt.com/c/A',
+        normalizedTitle: normalizeTitle('Sidebar A'),
+        lastSeenAt: 100,
+        idSource: 'sidebar-url',
+        isCurrent: false,
+      },
+    ]));
+
+    expect(result.graph.nodes['A'].title).toBe('Current A');
+    expect(result.graph.nodes['A'].url).toBe('https://chatgpt.com/c/A');
+    expect(result.graph.nodes['A'].aliases).toEqual(expect.arrayContaining(['Local Alias', 'Imported Alias', 'Imported A']));
+    expect(result.graph.nodes['A'].note).toBe('local note');
+    expect(result.graph.nodes['A'].label).toBe('local label');
+    expect(result.report.noteConflictCount).toBe(1);
+  });
+
+  it('dedupes edges, removes auto branch ghosts, retains stale valid nodes, drops invalid nodes and bad edges', () => {
+    const importedGraph = createEmptyGenealogyGraph();
+    importedGraph.nodes['realA'] = {
+      conversationId: 'realA',
+      idSource: 'sidebar-url',
+      title: 'Same',
+      url: 'https://chatgpt.com/c/realA',
+      normalizedTitle: 'same',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    importedGraph.nodes['realB'] = {
+      conversationId: 'realB',
+      idSource: 'sidebar-url',
+      title: 'Same',
+      url: 'https://chatgpt.com/c/realB',
+      normalizedTitle: 'same',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    importedGraph.nodes['stale'] = {
+      conversationId: 'stale',
+      idSource: 'sidebar-url',
+      title: 'Stale',
+      url: 'https://chatgpt.com/c/stale',
+      normalizedTitle: 'stale',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    importedGraph.nodes['WEB::ghost'] = {
+      conversationId: 'WEB::ghost',
+      idSource: 'synthetic',
+      title: '分支·Same',
+      url: 'https://chatgpt.com/',
+      normalizedTitle: normalizeTitle('分支·Same'),
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    importedGraph.nodes['bad'] = {
+      conversationId: 'WEB::bad',
+      idSource: 'synthetic',
+      title: 'Bad',
+      url: '',
+      normalizedTitle: 'bad',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    const placeholderId = makePlaceholderId('Parent');
+    importedGraph.nodes[placeholderId] = {
+      conversationId: placeholderId,
+      idSource: 'placeholder',
+      title: 'Parent',
+      url: '',
+      normalizedTitle: 'parent',
+      source: 'placeholder',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+      unresolved: true,
+    };
+    importedGraph.nodes['child'] = {
+      conversationId: 'child',
+      idSource: 'current-url',
+      title: 'Child',
+      url: 'https://chatgpt.com/c/child',
+      normalizedTitle: 'child',
+      source: 'current-page',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    upsertConversationEdge(importedGraph, { fromConversationId: 'realA', toConversationId: 'realB', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(importedGraph, { fromConversationId: 'realA', toConversationId: 'realB', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(importedGraph, { fromConversationId: 'realA', toConversationId: 'WEB::ghost', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(importedGraph, { fromConversationId: placeholderId, toConversationId: 'child', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(importedGraph, { fromConversationId: 'bad', toConversationId: 'child', source: 'native-marker', confidence: 'high' });
+
+    const result = reconcileImportedGenealogyGraph(importedGraph, createEmptyGenealogyGraph(), makeContext([
+      {
+        conversationId: 'realA',
+        title: 'Same',
+        url: 'https://chatgpt.com/c/realA',
+        normalizedTitle: 'same',
+        lastSeenAt: 100,
+        idSource: 'sidebar-url',
+        isCurrent: false,
+      },
+      {
+        conversationId: 'realB',
+        title: 'Same',
+        url: 'https://chatgpt.com/c/realB',
+        normalizedTitle: 'same',
+        lastSeenAt: 100,
+        idSource: 'sidebar-url',
+        isCurrent: false,
+      },
+      {
+        conversationId: 'child',
+        title: 'Child',
+        url: 'https://chatgpt.com/c/child',
+        normalizedTitle: 'child',
+        lastSeenAt: 100,
+        idSource: 'sidebar-url',
+        isCurrent: false,
+      },
+    ]));
+
+    expect(result.graph.nodes['WEB::ghost']).toBeUndefined();
+    expect(result.graph.nodes['bad']).toBeUndefined();
+    expect(result.graph.nodes['stale']).toBeDefined();
+    expect(result.graph.nodes['stale'].stale).toBe(true);
+    expect(result.report.duplicateTitleWarnings.length).toBeGreaterThan(0);
+    expect(result.report.droppedEdgeCount).toBeGreaterThan(0);
+    expect(result.report.ghostNodesRemoved.join(' ')).toContain('分支·Same');
+  });
+
+  it('clean invalid ghosts removes imported ghost but preserves stale valid conversation', () => {
+    const graph = createEmptyGenealogyGraph();
+    graph.nodes['stale'] = {
+      conversationId: 'stale',
+      idSource: 'sidebar-url',
+      title: 'Stale',
+      url: 'https://chatgpt.com/c/stale',
+      normalizedTitle: 'stale',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    graph.nodes['WEB::ghost'] = {
+      conversationId: 'WEB::ghost',
+      idSource: 'synthetic',
+      title: '分支·Stale',
+      url: '',
+      normalizedTitle: normalizeTitle('分支·Stale'),
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    upsertConversationEdge(graph, { fromConversationId: 'stale', toConversationId: 'WEB::ghost', source: 'native-marker', confidence: 'high' });
+    const result = cleanInvalidGhostNodes(graph, makeContext());
+    expect(result.graph.nodes['WEB::ghost']).toBeUndefined();
+    expect(result.graph.nodes['stale']).toBeDefined();
+    expect(result.report.removedNodeIds).toContain('WEB::ghost');
+    expect(result.report.willRemove.some((entry) => entry.title === 'Stale')).toBe(false);
+  });
+
+  it('does not drop valid url nodes, edge nodes, note nodes, or unresolved parent with outgoing edge', () => {
+    const graph = createEmptyGenealogyGraph();
+    const placeholderId = makePlaceholderId('Parent');
+    graph.nodes['A'] = {
+      conversationId: 'A',
+      idSource: 'sidebar-url',
+      title: 'A',
+      url: 'https://chatgpt.com/c/A',
+      normalizedTitle: 'a',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    graph.nodes['B'] = {
+      conversationId: 'B',
+      idSource: 'sidebar-url',
+      title: 'B',
+      url: 'https://chatgpt.com/c/B',
+      normalizedTitle: 'b',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    graph.nodes['noted'] = {
+      conversationId: 'WEB::noted',
+      idSource: 'synthetic',
+      title: 'Protected Note',
+      url: '',
+      normalizedTitle: 'protected note',
+      note: 'keep',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    graph.nodes[placeholderId] = {
+      conversationId: placeholderId,
+      idSource: 'placeholder',
+      title: 'Parent',
+      url: '',
+      normalizedTitle: 'parent',
+      unresolved: true,
+      source: 'placeholder',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    graph.nodes['child'] = {
+      conversationId: 'child',
+      idSource: 'current-url',
+      title: 'Child',
+      url: 'https://chatgpt.com/c/child',
+      normalizedTitle: 'child',
+      source: 'current-page',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'B', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(graph, { fromConversationId: placeholderId, toConversationId: 'child', source: 'native-marker', confidence: 'high' });
+
+    const context = makeContext();
+    const result = cleanInvalidGhostNodes(graph, context);
+    expect(result.graph.nodes['A']).toBeDefined();
+    expect(result.graph.nodes['B']).toBeDefined();
+    expect(result.graph.nodes['noted']).toBeDefined();
+    expect(result.graph.nodes[placeholderId]).toBeDefined();
+    expect(result.report.willRemove.find((entry) => entry.title === 'A')).toBeUndefined();
+    expect(result.report.willRemove.find((entry) => entry.title === 'B')).toBeUndefined();
+    expect(isProtectedConversationNode(graph.nodes['A'], graph, context)).toBe(true);
+    expect(isProtectedConversationNode(graph.nodes['B'], graph, context)).toBe(true);
+    expect(isProtectedConversationNode(graph.nodes['noted'], graph, context)).toBe(true);
+    expect(isProtectedConversationNode(graph.nodes[placeholderId], graph, context)).toBe(true);
+  });
+
+  it('removes invalid placeholder with no edge or value', () => {
+    const graph = createEmptyGenealogyGraph();
+    const placeholderId = makePlaceholderId('Orphan');
+    graph.nodes[placeholderId] = {
+      conversationId: placeholderId,
+      idSource: 'placeholder',
+      title: 'Orphan',
+      url: '',
+      normalizedTitle: 'orphan',
+      unresolved: true,
+      source: 'placeholder',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    const result = cleanInvalidGhostNodes(graph, makeContext());
+    expect(result.graph.nodes[placeholderId]).toBeUndefined();
+    expect(result.report.invalidPlaceholders).toContain('Orphan');
+  });
+
+  it('current conversation never becomes missing or stale', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A2', 'Old Title');
+    const hydrated = hydrateNode('A2', makeContext([], {
+      valid: true,
+      conversationId: 'A2',
+      title: '分支对话功能测试A2',
+      url: 'https://chatgpt.com/c/A2',
+      normalizedTitle: normalizeTitle('分支对话功能测试A2'),
+      idSource: 'current-url',
+    }), graph)!;
+    expect(hydrated.missing).toBe(false);
+    expect(hydrated.stale).toBe(false);
+    expect(hydrated.invalid).toBe(false);
+    expect(hydrated.idSource).toBe('current-url');
+  });
+
+  it('sidebar verified node never becomes missing', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A2', 'A2');
+    const hydrated = hydrateNode('A2', makeContext([sidebarEntry('A2', 'A2')]), graph)!;
+    expect(hydrated.missing).toBe(false);
+    expect(hydrated.stale).toBe(false);
+  });
+
+  it('stale valid node remains renderable and clickable', () => {
+    const graph = createEmptyGenealogyGraph();
+    graph.nodes['old-id'] = {
+      conversationId: 'old-id',
+      idSource: 'unknown',
+      title: 'Old',
+      url: 'https://chatgpt.com/c/old-id',
+      normalizedTitle: 'old',
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    };
+    const hydrated = hydrateNode('old-id', makeContext(), graph)!;
+    expect(hydrated.stale).toBe(true);
+    expect(hydrated.invalid).toBe(false);
+    expect(canRenderHydratedNode(hydrated, graph, makeContext())).toBe(true);
+  });
+
+  it('homepage URL node is invalid and not renderable', () => {
+    const graph = createEmptyGenealogyGraph();
+    graph.nodes['bad'] = {
+      conversationId: 'bad',
+      idSource: 'unknown',
+      title: 'Bad',
+      url: 'https://chatgpt.com/',
+      normalizedTitle: 'bad',
+      source: 'metadata',
+      firstSeenAt: 1,
+      lastSeenAt: 1,
+    };
+    const hydrated = hydrateNode('bad', makeContext(), graph)!;
+    expect(hydrated.invalid).toBe(true);
+    expect(canRenderHydratedNode(hydrated, graph, makeContext())).toBe(false);
+  });
+
+  it('auto branch title with real sidebar url is not deleted', () => {
+    const graph = createEmptyGenealogyGraph();
+    graph.nodes['G'] = {
+      conversationId: 'G',
+      idSource: 'sidebar-url',
+      title: '分支·F',
+      url: 'https://chatgpt.com/c/G',
+      normalizedTitle: normalizeTitle('分支·F'),
+      source: 'sidebar',
+      firstSeenAt: 1,
+      lastSeenAt: 1,
+    };
+    const context = makeContext([sidebarEntry('G', '分支·F')]);
+    const hydrated = hydrateNode('G', context, graph)!;
+    expect(isAutoBranchGhostNode(hydrated, graph, context)).toBe(false);
+    expect(canRenderHydratedNode(hydrated, graph, context)).toBe(true);
+  });
+
+  it('synthetic auto branch ghost is deleted when verified sibling exists', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'Parent', 'Parent');
+    addVerifiedNode(graph, 'G', '分支对话功能测试B2');
+    graph.nodes['WEB::abc'] = {
+      conversationId: 'WEB::abc',
+      idSource: 'synthetic',
+      title: '分支·Parent',
+      url: '',
+      normalizedTitle: normalizeTitle('分支·Parent'),
+      source: 'metadata',
+      firstSeenAt: 1,
+      lastSeenAt: 1,
+    };
+    upsertConversationEdge(graph, { fromConversationId: 'Parent', toConversationId: 'WEB::abc', source: 'native-marker', confidence: 'high' });
+    upsertConversationEdge(graph, { fromConversationId: 'Parent', toConversationId: 'G', source: 'native-marker', confidence: 'high' });
+    const result = cleanInvalidGhostNodes(graph, makeContext([sidebarEntry('Parent', 'Parent'), sidebarEntry('G', '分支对话功能测试B2')]));
+    expect(result.graph.nodes['WEB::abc']).toBeUndefined();
+  });
+
+  it('WEB node cleaned removes edges as well', () => {
+    const graph = createEmptyGenealogyGraph();
+    addVerifiedNode(graph, 'A', 'A');
+    graph.nodes['WEB::abc'] = {
+      conversationId: 'WEB::abc',
+      idSource: 'synthetic',
+      title: 'Ghost',
+      url: '',
+      normalizedTitle: 'ghost',
+      source: 'metadata',
+      firstSeenAt: 1,
+      lastSeenAt: 1,
+    };
+    upsertConversationEdge(graph, { fromConversationId: 'A', toConversationId: 'WEB::abc', source: 'native-marker', confidence: 'high' });
+    const result = cleanInvalidGhostNodes(graph, makeContext([sidebarEntry('A', 'A')]));
+    expect(result.graph.nodes['WEB::abc']).toBeUndefined();
+    expect(result.graph.edges.some((edge) => edge.fromConversationId === 'WEB::abc' || edge.toConversationId === 'WEB::abc')).toBe(false);
   });
 });

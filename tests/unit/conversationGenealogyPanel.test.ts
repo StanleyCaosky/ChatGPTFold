@@ -2,6 +2,51 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationGenealogyGraph, CurrentConversation, SidebarCatalogEntry } from '../../src/shared/conversationGenealogyTypes';
 import { __TEST__ } from '../../src/content/conversationGenealogyPanel';
 import { normalizeTitle } from '../../src/content/conversationGenealogyStore';
+import * as genealogyScanner from '../../src/content/conversationGenealogyScanner';
+
+vi.mock('../../src/content/conversationGenealogyScanner', () => ({
+  getCurrentConversation: vi.fn(() => ({
+    valid: true,
+    conversationId: 'G',
+    title: 'G',
+    url: 'https://chatgpt.com/c/G',
+    normalizedTitle: 'g',
+    idSource: 'current-url',
+  })),
+  scanSidebarCatalog: vi.fn(() => []),
+  updateConversationGenealogy: vi.fn(async () => ({
+    graph: { schemaVersion: 3, nodes: {}, edges: [], updatedAt: 1 },
+    diagnostics: {
+      currentConversationId: 'G',
+      currentTitle: 'G',
+      sidebarCatalogCount: 0,
+      renderableNodeCount: 0,
+      totalStoredNodeCount: 0,
+      edgeCount: 0,
+      unresolvedCount: 0,
+      parentMarker: { text: '', parentTitle: '', confidence: '', rejectedReason: '' },
+      parentResolution: { resolvedParentId: '', resolvedParentTitle: '', matchType: 'none', duplicateCount: 0 },
+      renameInfo: { nodeConversationId: 'G', currentTitle: 'G', previousAliases: [], titleChanged: false },
+      placeholderMerge: { placeholdersBefore: 0, placeholdersMerged: 0, placeholdersAfter: 0, mergeDetails: [] },
+      ghostCleanup: { removedGhostsCount: 0, removedGhostTitles: [], skippedProtectedGhosts: [] },
+      autoBranchGhosts: { detectedCount: 0, titles: [], mergedCount: 0, removedCount: 0, mergeDetails: [], skippedReasons: [] },
+      migration: { migrated: false, droppedLegacyNodes: 0, droppedLegacyEdges: 0 },
+      errors: [],
+    },
+    sidebarCatalog: [],
+    currentConversation: {
+      valid: true,
+      conversationId: 'G',
+      title: 'G',
+      url: 'https://chatgpt.com/c/G',
+      normalizedTitle: 'g',
+      idSource: 'current-url',
+    },
+    graphChanged: false,
+  })),
+}));
+
+const updateConversationGenealogyMock = vi.mocked(genealogyScanner.updateConversationGenealogy);
 
 function makeGraph(): ConversationGenealogyGraph {
   return {
@@ -65,10 +110,51 @@ function addEdge(graph: ConversationGenealogyGraph, from: string, to: string) {
   });
 }
 
+async function flushAsyncWork(rounds = 6): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
+    await Promise.resolve();
+  }
+}
+
+function makeDefaultUpdateResult() {
+  return {
+    graph: { schemaVersion: 3, nodes: {}, edges: [], updatedAt: 1 },
+    diagnostics: {
+      currentConversationId: 'G',
+      currentTitle: 'G',
+      sidebarCatalogCount: 0,
+      renderableNodeCount: 0,
+      totalStoredNodeCount: 0,
+      edgeCount: 0,
+      unresolvedCount: 0,
+      parentMarker: { text: '', parentTitle: '', confidence: '', rejectedReason: '' },
+      parentResolution: { resolvedParentId: '', resolvedParentTitle: '', matchType: 'none', duplicateCount: 0 },
+      renameInfo: { nodeConversationId: 'G', currentTitle: 'G', previousAliases: [], titleChanged: false },
+      placeholderMerge: { placeholdersBefore: 0, placeholdersMerged: 0, placeholdersAfter: 0, mergeDetails: [] },
+      ghostCleanup: { removedGhostsCount: 0, removedGhostTitles: [], skippedProtectedGhosts: [] },
+      autoBranchGhosts: { detectedCount: 0, titles: [], mergedCount: 0, removedCount: 0, mergeDetails: [], skippedReasons: [] },
+      migration: { migrated: false, droppedLegacyNodes: 0, droppedLegacyEdges: 0 },
+      errors: [],
+    },
+    sidebarCatalog: [],
+    currentConversation: {
+      valid: true,
+      conversationId: 'G',
+      title: 'G',
+      url: 'https://chatgpt.com/c/G',
+      normalizedTitle: 'g',
+      idSource: 'current-url',
+    },
+    graphChanged: false,
+  };
+}
+
 describe('genealogy panel rendering', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
     document.body.innerHTML = '';
+    updateConversationGenealogyMock.mockReset();
+    updateConversationGenealogyMock.mockResolvedValue(makeDefaultUpdateResult() as any);
     vi.spyOn(window, 'location', 'get').mockReturnValue({
       pathname: '/c/G',
       origin: 'https://chatgpt.com',
@@ -126,7 +212,7 @@ describe('genealogy panel rendering', () => {
 
 describe('genealogy panel navigation guard', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
     document.body.innerHTML = '';
     vi.spyOn(window, 'location', 'get').mockReturnValue({
       pathname: '/c/current',
@@ -209,11 +295,293 @@ describe('genealogy panel navigation guard', () => {
     expect(__TEST__.getNavigationTarget(validNode as any).type).toBe('url');
     expect(__TEST__.getNavigationTarget(fallbackNode as any).url).toBe('https://chatgpt.com/c/conv-fallback');
   });
+
+  it('rejects imported WEB ids and allows stale but valid nodes', () => {
+    const webNode = {
+      conversationId: 'WEB::ghost',
+      title: 'Ghost',
+      normalizedTitle: 'ghost',
+      url: '',
+      idSource: 'synthetic',
+      aliases: [],
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+      isCurrent: false,
+      unresolved: false,
+      stale: true,
+      missing: true,
+      invalid: true,
+    };
+    const staleValidNode = {
+      conversationId: 'conv-stale',
+      title: 'Stale',
+      normalizedTitle: 'stale',
+      url: 'https://chatgpt.com/c/conv-stale',
+      idSource: 'sidebar-url',
+      aliases: [],
+      source: 'metadata',
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+      isCurrent: false,
+      unresolved: false,
+      stale: true,
+      missing: true,
+      invalid: false,
+    };
+
+    expect(__TEST__.getNavigationTarget(webNode as any).type).toBe('invalid');
+    expect(__TEST__.getNavigationTarget(staleValidNode as any).type).toBe('url');
+  });
+});
+
+describe('genealogy import summary UI', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    document.body.innerHTML = '';
+    __TEST__.closePanel();
+    updateConversationGenealogyMock.mockReset();
+    updateConversationGenealogyMock.mockResolvedValue(makeDefaultUpdateResult() as any);
+  });
+
+  it('builds import summary text with core counts and policy', () => {
+    const text = __TEST__.buildImportSummary({
+      importedNodeCount: 5,
+      importedEdgeCount: 4,
+      validNodeCount: 3,
+      staleNodeCount: 1,
+      invalidNodeCount: 1,
+      invalidNodesDropped: ['bad'],
+      ghostNodesRemoved: ['ghost'],
+      duplicateEdgesRemoved: 2,
+      droppedEdgeCount: 1,
+      droppedEdges: ['bad -> child'],
+      aliasImportCount: 3,
+      noteConflictCount: 1,
+      noteConflictPolicy: 'local-wins',
+      duplicateTitleWarnings: ['same: A, B'],
+      labelsImported: 1,
+      notesImported: 1,
+      confirmed: false,
+    });
+
+    expect(text).toContain('Imported nodes: 5');
+    expect(text).toContain('Stale/unverified nodes: 1');
+    expect(text).toContain('Note conflict policy: local-wins');
+    expect(text).toContain('same: A, B');
+    expect(text).toContain('Local memory nodes that would be removed');
+    expect(text).toContain('This does not delete ChatGPT conversations.');
+  });
+
+  it('builds clean summary separately from import preview', () => {
+    const text = __TEST__.buildCleanSummary({
+      ghostCandidates: ['分支·F'],
+      invalidPlaceholders: ['placeholder'],
+      autoBranchGhosts: ['分支·F'],
+      syntheticInvalidNodes: ['WEB::ghost'],
+      homepageInvalidNodes: ['Homepage Ghost'],
+      isolatedInvalidNodes: ['Isolated'],
+      protectedNodes: [{ title: '对话分支测试B', reasons: ['valid /c/<id> URL'] }],
+      willRemove: [{ title: '分支·F', reasons: ['auto branch ghost'] }],
+      removedNodeIds: ['WEB::ghost'],
+      removedEdges: ['A -> WEB::ghost'],
+      protectedCount: 1,
+    });
+
+    expect(text).toContain('--- Clean Preview ---');
+    expect(text).not.toContain('Imported nodes');
+    expect(text).toContain('Protected:');
+    expect(text).toContain('对话分支测试B');
+    expect(text).toContain('This does not delete ChatGPT conversations.');
+  });
+});
+
+describe('genealogy panel minimal UI', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    document.body.innerHTML = '';
+    __TEST__.closePanel();
+    updateConversationGenealogyMock.mockReset();
+    updateConversationGenealogyMock.mockResolvedValue(makeDefaultUpdateResult() as any);
+  });
+
+  it('does not render in-page management buttons or diagnostics preview', async () => {
+    await __TEST__.openPanel();
+    const text = document.body.textContent ?? '';
+    expect(text).not.toContain('Export Memory');
+    expect(text).not.toContain('Import Memory');
+    expect(text).not.toContain('Clean Invalid Ghosts');
+    expect(text).not.toContain('Reset genealogy graph');
+    expect(text).not.toContain('Confirm Import');
+    expect(text).not.toContain('Confirm Clean');
+    expect(document.querySelector('.longconv-branch-diagnostics')).toBeNull();
+  });
+
+  it('branch map panel opens as sidebar path and does not open map directly', async () => {
+    await __TEST__.openPanel();
+    await flushAsyncWork();
+    expect(document.querySelector('.longconv-branch-panel')).not.toBeNull();
+    expect(document.querySelector('.longconv-branch-map-backdrop')).toBeNull();
+  });
+
+  it('panel renders nested tree, highlights active node, and opens map view from panel', async () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'B', 'B');
+    addNode(graph, 'G', 'G', { idSource: 'current-url', source: 'current-page', isCurrent: true });
+    addEdge(graph, 'A', 'B');
+    addEdge(graph, 'B', 'G');
+    updateConversationGenealogyMock.mockResolvedValueOnce({
+      graph,
+      diagnostics: {
+        currentConversationId: 'G',
+        currentTitle: 'G',
+        sidebarCatalogCount: 0,
+        renderableNodeCount: 3,
+        totalStoredNodeCount: 3,
+        edgeCount: 2,
+        unresolvedCount: 0,
+        parentMarker: { text: 'Branch created from B', parentTitle: 'B', confidence: 'high', rejectedReason: '' },
+        parentResolution: { resolvedParentId: 'B', resolvedParentTitle: 'B', matchType: 'exact-title/sidebar', duplicateCount: 0 },
+        renameInfo: { nodeConversationId: 'G', currentTitle: 'G', previousAliases: [], titleChanged: false },
+        placeholderMerge: { placeholdersBefore: 0, placeholdersMerged: 0, placeholdersAfter: 0, mergeDetails: [] },
+        ghostCleanup: { removedGhostsCount: 0, removedGhostTitles: [], skippedProtectedGhosts: [] },
+        autoBranchGhosts: { detectedCount: 0, titles: [], mergedCount: 0, removedCount: 0, mergeDetails: [], skippedReasons: [] },
+        migration: { migrated: false, droppedLegacyNodes: 0, droppedLegacyEdges: 0 },
+        errors: [],
+      },
+      sidebarCatalog: makeCatalog([['A', 'A'], ['B', 'B'], ['G', 'G', true]]),
+      currentConversation: makeCurrent('G', 'G', true),
+      graphChanged: false,
+    });
+
+    await __TEST__.openPanel();
+    await flushAsyncWork();
+    const rows = Array.from(document.querySelectorAll('.longconv-branch-row'));
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+    expect(rows.some((row) => row.classList.contains('longconv-branch-row-active'))).toBe(true);
+
+    const openMapBtn = Array.from(document.querySelectorAll('button')).find((btn) => btn.textContent === 'Open Current Map') as HTMLButtonElement;
+    openMapBtn.click();
+    expect(document.querySelector('.longconv-branch-map-backdrop')).not.toBeNull();
+  });
+
+  it('tree rows render clickable conversation entries', async () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'G', 'G', { idSource: 'current-url', source: 'current-page', isCurrent: true });
+    addEdge(graph, 'A', 'G');
+    updateConversationGenealogyMock.mockResolvedValueOnce({
+      graph,
+      diagnostics: {
+        currentConversationId: 'G',
+        currentTitle: 'G',
+        sidebarCatalogCount: 0,
+        renderableNodeCount: 2,
+        totalStoredNodeCount: 2,
+        edgeCount: 1,
+        unresolvedCount: 0,
+        parentMarker: { text: '', parentTitle: '', confidence: '', rejectedReason: '' },
+        parentResolution: { resolvedParentId: '', resolvedParentTitle: '', matchType: 'none', duplicateCount: 0 },
+        renameInfo: { nodeConversationId: 'G', currentTitle: 'G', previousAliases: [], titleChanged: false },
+        placeholderMerge: { placeholdersBefore: 0, placeholdersMerged: 0, placeholdersAfter: 0, mergeDetails: [] },
+        ghostCleanup: { removedGhostsCount: 0, removedGhostTitles: [], skippedProtectedGhosts: [] },
+        autoBranchGhosts: { detectedCount: 0, titles: [], mergedCount: 0, removedCount: 0, mergeDetails: [], skippedReasons: [] },
+        migration: { migrated: false, droppedLegacyNodes: 0, droppedLegacyEdges: 0 },
+        errors: [],
+      },
+      sidebarCatalog: makeCatalog([['A', 'A'], ['G', 'G', true]]),
+      currentConversation: makeCurrent('G', 'G', true),
+      graphChanged: false,
+    });
+
+    await __TEST__.openPanel();
+    await flushAsyncWork();
+    const clickable = document.querySelector('.longconv-branch-row-main') as HTMLElement | null;
+    expect(clickable).not.toBeNull();
+    expect(clickable?.title).toContain('/c/');
+  });
+
+  it('does not render WEB synthetic nodes in tree', async () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'WEB::abc', 'Ghost', { idSource: 'synthetic', url: '' });
+    addEdge(graph, 'A', 'WEB::abc');
+    updateConversationGenealogyMock.mockResolvedValueOnce({
+      graph,
+      diagnostics: makeDefaultUpdateResult().diagnostics,
+      sidebarCatalog: makeCatalog([['A', 'A', true]]),
+      currentConversation: makeCurrent('A', 'A', true),
+      graphChanged: false,
+    });
+
+    await __TEST__.openPanel();
+    await flushAsyncWork();
+    expect(document.body.textContent).not.toContain('WEB::abc');
+    expect(document.body.textContent).not.toContain('Ghost');
+  });
+
+  it('open current map uses only the active conversation component', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'B', 'B', { isCurrent: true, idSource: 'current-url', source: 'current-page' });
+    addNode(graph, 'X', 'X');
+    addNode(graph, 'Y', 'Y');
+    addEdge(graph, 'A', 'B');
+    addEdge(graph, 'X', 'Y');
+    const catalog = makeCatalog([['A', 'A'], ['B', 'B', true], ['X', 'X'], ['Y', 'Y']]);
+
+    const context = __TEST__.buildMapViewGraphForFocus(graph, 'B', catalog, makeCurrent('B', 'B', true));
+    expect(Object.keys(context.graph.nodes).sort()).toEqual(['A', 'B']);
+    expect(context.graph.edges).toHaveLength(1);
+    expect(context.graph.edges[0].fromConversationId).toBe('A');
+    expect(context.graph.edges[0].toConversationId).toBe('B');
+  });
+
+  it('open current map for isolated conversation returns single-node context', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'B', 'B');
+    addEdge(graph, 'A', 'B');
+    const catalog = makeCatalog([['A', 'A'], ['B', 'B']]);
+
+    const context = __TEST__.buildMapViewGraphForFocus(graph, 'Z', catalog, makeCurrent('Z', 'Z', true));
+    expect(Object.keys(context.graph.nodes)).toEqual(['Z']);
+    expect(context.graph.edges).toHaveLength(0);
+    expect(context.roots).toHaveLength(1);
+    expect(context.roots[0].conversationId).toBe('Z');
+  });
+
+  it('node map shortcut uses that node focus while keeping its component', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'B', 'B');
+    addNode(graph, 'C', 'C');
+    addEdge(graph, 'A', 'B');
+    addEdge(graph, 'B', 'C');
+    const catalog = makeCatalog([['A', 'A'], ['B', 'B'], ['C', 'C']]);
+
+    const context = __TEST__.buildMapViewGraphForFocus(graph, 'B', catalog, makeCurrent('C', 'C', true));
+    expect(Object.keys(context.graph.nodes).sort()).toEqual(['A', 'B', 'C']);
+    expect(context.focusConversationId).toBe('B');
+  });
+
+  it('isolated current conversation does not inherit unrelated history in map context', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'B', 'B');
+    addEdge(graph, 'A', 'B');
+
+    const context = __TEST__.buildMapViewGraphForFocus(graph, 'Z', makeCatalog([['A', 'A'], ['B', 'B']]), makeCurrent('Z', 'Z', true));
+    expect(Object.keys(context.graph.nodes)).toEqual(['Z']);
+    expect(Object.keys(context.graph.nodes)).not.toContain('A');
+    expect(Object.keys(context.graph.nodes)).not.toContain('B');
+  });
 });
 
 describe('genealogy map view layout and interactions', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
     document.body.innerHTML = '';
     vi.spyOn(window, 'location', 'get').mockReturnValue({
       pathname: '/c/G',
@@ -305,6 +673,27 @@ describe('genealogy map view layout and interactions', () => {
     wrapper.appendChild(button);
     expect(__TEST__.isMapInteractiveTarget(child)).toBe(true);
     expect(__TEST__.truncateNote('hello world', 5)).toBe('hell…');
+  });
+
+  it('removes top Fit and Reset while keeping a single Notes toggle', async () => {
+    const { graph, catalog } = buildBranchGraph();
+    const current = makeCurrent('G', 'G', true);
+    __TEST__.setLatestGenealogySnapshot(graph, makeDefaultUpdateResult().diagnostics as any, catalog, current);
+    await __TEST__.openBranchMapView();
+
+    const toolbarButtons = Array.from(document.querySelectorAll('.longconv-branch-map-toolbar button')).map((btn) => btn.textContent?.trim());
+    expect(toolbarButtons).not.toContain('Fit');
+    expect(toolbarButtons).not.toContain('Reset');
+    expect(document.body.textContent?.match(/Notes/g)?.length ?? 0).toBe(1);
+  });
+
+  it('map view filters synthetic nodes from rendered component', () => {
+    const graph = makeGraph();
+    addNode(graph, 'A', 'A');
+    addNode(graph, 'WEB::abc', 'Ghost', { idSource: 'synthetic', url: '' });
+    addEdge(graph, 'A', 'WEB::abc');
+    const context = __TEST__.buildMapViewGraphForFocus(graph, 'A', makeCatalog([['A', 'A', true]]), makeCurrent('A', 'A', true));
+    expect(Object.keys(context.graph.nodes)).toEqual(['A']);
   });
 
   it('allows collapsing an active ancestor subtree', () => {

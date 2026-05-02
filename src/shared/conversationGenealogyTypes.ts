@@ -49,6 +49,102 @@ export interface ConversationGenealogyGraph {
   updatedAt: number;
 }
 
+export interface GenealogyMemoryNode {
+  conversationId: string;
+  idSource?: ConversationIdSource;
+  title: string;
+  url?: string;
+  normalizedTitle?: string;
+  aliases?: string[];
+  parentConversationId?: string;
+  parentTitleFromMarker?: string;
+  source?: ConversationNode['source'];
+  firstSeenAt?: number;
+  lastSeenAt?: number;
+  unresolved?: boolean;
+  stale?: boolean;
+  missing?: boolean;
+  invalid?: boolean;
+  label?: string;
+  note?: string;
+}
+
+export interface GenealogyMemoryEdge {
+  fromConversationId: string;
+  toConversationId: string;
+  fromTitle?: string;
+  toTitle?: string;
+  source: ConversationEdge['source'];
+  markerText?: string;
+  confidence: Confidence;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface GenealogyMemoryExport {
+  exportType: 'chatgptfold.genealogy-memory';
+  exportVersion: 1;
+  appName: 'ChatGPTFold';
+  appVersion?: string;
+  exportedAt: number;
+  graphSchemaVersion: number;
+  graph: {
+    nodes: Record<string, GenealogyMemoryNode>;
+    edges: GenealogyMemoryEdge[];
+    currentConversationId?: string;
+    updatedAt: number;
+  };
+  ui?: {
+    showNotePreviews?: boolean;
+  };
+  diagnostics?: {
+    nodeCount: number;
+    edgeCount: number;
+    exportedFromHost: string;
+    cleanedBeforeExport: boolean;
+  };
+}
+
+export interface GenealogyMemoryImportReport {
+  importedNodeCount: number;
+  importedEdgeCount: number;
+  validNodeCount: number;
+  staleNodeCount: number;
+  invalidNodeCount: number;
+  invalidNodesDropped: string[];
+  ghostNodesRemoved: string[];
+  duplicateEdgesRemoved: number;
+  droppedEdgeCount: number;
+  droppedEdges: string[];
+  aliasImportCount: number;
+  noteConflictCount: number;
+  noteConflictPolicy: 'local-wins';
+  duplicateTitleWarnings: string[];
+  labelsImported: number;
+  notesImported: number;
+  confirmed: boolean;
+}
+
+export interface GenealogyMemoryCleanReport {
+  ghostCandidates: string[];
+  invalidPlaceholders: string[];
+  autoBranchGhosts: string[];
+  syntheticInvalidNodes: string[];
+  homepageInvalidNodes: string[];
+  isolatedInvalidNodes: string[];
+  protectedNodes: Array<{
+    title: string;
+    reasons: string[];
+  }>;
+  willRemove: Array<{
+    title: string;
+    reasons: string[];
+  }>;
+  removedNodeIds: string[];
+  removedEdges: string[];
+  protectedCount: number;
+}
+
 export interface SidebarCatalogEntry {
   conversationId: string;
   title: string;
@@ -153,4 +249,5 @@ export interface GenealogyUpdateResult {
   diagnostics: GenealogyDiagnostics;
   sidebarCatalog: SidebarCatalogEntry[];
   currentConversation: CurrentConversation;
+  graphChanged: boolean;
 }

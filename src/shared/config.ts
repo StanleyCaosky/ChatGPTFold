@@ -15,6 +15,8 @@ export interface Config {
   recentCount: number;
   pauseNearTop: boolean;
   showStatusBadge: boolean;
+  branchMapAutoScanEnabled: boolean;
+  showBranchDiagnostics: boolean;
   experimentalContainmentEnabled: boolean;
 }
 
@@ -29,6 +31,8 @@ export const DEFAULT_CONFIG: Config = {
   minCharsToCollapse: 3000,
   recentCount: 20,
   pauseNearTop: true,
-  showStatusBadge: true,
+  showStatusBadge: false,
+  branchMapAutoScanEnabled: true,
+  showBranchDiagnostics: false,
   experimentalContainmentEnabled: false,
 };

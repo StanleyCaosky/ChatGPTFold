@@ -10,6 +10,7 @@ import {
   cleanupGenealogyGraph,
   createEmptyGenealogyGraph,
   hydrateNode,
+  isRealConversationId,
   isValidConversationUrl,
   loadGenealogyGraph,
   makePlaceholderId,
@@ -24,7 +25,56 @@ import {
 
 export function extractCurrentConversationId(): string {
   const match = location.pathname.match(/\/c\/([^/?#]+)/);
-  return match ? match[1] : 'unknown';
+  if (!match) return 'unknown';
+  return isRealConversationId(match[1]) ? match[1] : 'unknown';
+}
+
+export function serializeGraphForComparison(graph: ConversationGenealogyGraph): string {
+  const sortedNodeIds = Object.keys(graph.nodes).sort();
+  const normalizedNodes = sortedNodeIds.map((id) => {
+    const node = graph.nodes[id];
+    return {
+      conversationId: node.conversationId,
+      idSource: node.idSource ?? '',
+      title: node.title,
+      url: node.url,
+      normalizedTitle: node.normalizedTitle,
+      aliases: [...(node.aliases ?? [])].sort(),
+      parentConversationId: node.parentConversationId ?? '',
+      parentTitleFromMarker: node.parentTitleFromMarker ?? '',
+      source: node.source,
+      isCurrent: !!node.isCurrent,
+      unresolved: !!node.unresolved,
+      stale: !!node.stale,
+      missing: !!node.missing,
+      invalid: !!node.invalid,
+      label: node.label ?? '',
+      note: node.note ?? '',
+    };
+  });
+
+  const normalizedEdges = [...graph.edges]
+    .map((edge) => ({
+      fromConversationId: edge.fromConversationId,
+      toConversationId: edge.toConversationId,
+      fromTitle: edge.fromTitle ?? '',
+      toTitle: edge.toTitle ?? '',
+      source: edge.source,
+      markerText: edge.markerText ?? '',
+      confidence: edge.confidence,
+    }))
+    .sort((a, b) => {
+      const left = `${a.fromConversationId}\u0000${a.toConversationId}\u0000${a.source}\u0000${a.markerText}`;
+      const right = `${b.fromConversationId}\u0000${b.toConversationId}\u0000${b.source}\u0000${b.markerText}`;
+      return left.localeCompare(right);
+    });
+
+  return JSON.stringify({
+    schemaVersion: graph.schemaVersion,
+    currentConversationId: graph.currentConversationId ?? '',
+    nodes: normalizedNodes,
+    edges: normalizedEdges,
+  });
 }
 
 export function extractCurrentTitle(): string {
@@ -167,6 +217,7 @@ export async function updateConversationGenealogy(): Promise<GenealogyUpdateResu
   const loaded = await loadGenealogyGraph();
   const graph = loaded.graph;
   const migration = loaded.migration;
+  const graphBefore = serializeGraphForComparison(graph);
   const errors: string[] = [];
   const sidebarCatalog = scanSidebarCatalog();
   const currentConversation = getCurrentConversation(sidebarCatalog);
@@ -315,7 +366,11 @@ export async function updateConversationGenealogy(): Promise<GenealogyUpdateResu
     currentConversation,
   });
 
-  await saveGenealogyGraph(graph);
+  const graphAfter = serializeGraphForComparison(graph);
+  const graphChanged = graphBefore !== graphAfter;
+  if (graphChanged) {
+    await saveGenealogyGraph(graph);
+  }
 
   const renderableNodeCount = getRenderableNodes(graph, sidebarCatalog, currentConversation).length;
   const unresolvedCount = Object.values(graph.nodes).filter((node) => node.unresolved).length;
@@ -375,6 +430,7 @@ export async function updateConversationGenealogy(): Promise<GenealogyUpdateResu
     diagnostics,
     sidebarCatalog,
     currentConversation,
+    graphChanged,
   };
 }
 
