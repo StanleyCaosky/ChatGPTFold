@@ -1,307 +1,285 @@
 # ChatGPTFold
 
-![Version](https://img.shields.io/badge/version-v1.2.2-blue)
+![Version](https://img.shields.io/badge/version-v1.2.4-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Chrome](https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-orange)
+![Browser](https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-orange)
 ![Privacy](https://img.shields.io/badge/privacy-local--first-brightgreen)
 ![Telemetry](https://img.shields.io/badge/telemetry-none-lightgrey)
 
-A local-first Chrome/Edge extension for folding long ChatGPT messages and mapping observed conversation branches.
+A local-first Chrome/Edge extension for folding long ChatGPT conversations and mapping observed conversation branches.
 
-**Short summary:** ChatGPTFold folds long ChatGPT messages, helps you navigate observed branch relationships, and keeps all extension data local to your browser.
-
-Long ChatGPT conversations are powerful, but they can become slow, noisy, and hard to navigate. ChatGPTFold adds long-message folding, a conversation branch map, and local memory export/import without backend APIs, telemetry, or full message storage.
+Long ChatGPT conversations are powerful, but they can become slow, noisy, and difficult to navigate. ChatGPTFold adds long-message folding, a conversation branch map, local branch memory, and deleted-conversation tombstones - all without backend APIs, telemetry, or full message storage.
 
 ## Quick Links
 
 - [Features](#key-features)
+- [Screenshots](#screenshots)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Privacy](#privacy--permissions)
 - [Limitations](#limitations)
 - [Development](#development)
-- [Releases](#version-highlights)
+- [Version Highlights](#version-highlights)
 
 ## What Is ChatGPTFold?
 
-ChatGPTFold is a browser extension for ChatGPT that focuses on two practical problems:
+ChatGPTFold is a browser extension for people who use ChatGPT for long, branching work.
 
-1. Long conversations become hard to scroll and visually noisy.
-2. Branching conversations are difficult to track once they spread across multiple chats.
+It focuses on three practical problems:
 
-The extension works directly on the ChatGPT page, uses local browser storage, and adds tools for folding long messages and organizing observed conversation branches.
+1. Long conversations become visually noisy and hard to scan.
+2. Branch relationships become difficult to remember across multiple chats.
+3. Deleted parent conversations can make surviving branches harder to understand.
+
+Unlike a simple folding extension, ChatGPTFold combines long-message folding with a local branch graph, a visual map view, tombstone preservation for deleted ancestors, and manual memory export/import. The result is a more navigable ChatGPT workspace without relying on unofficial backend tree access.
 
 ## Who Is This For?
 
 ChatGPTFold is useful if you:
 
-- work with very long ChatGPT threads;
+- work with very long ChatGPT conversations;
 - write long prompts or receive long code-heavy replies;
-- use ChatGPT conversation branches heavily;
-- want a local branch map without relying on unofficial backend APIs;
-- need to move branch metadata manually between browsers or machines.
+- frequently use ChatGPT conversation branches;
+- want to browse branch relationships visually;
+- want local branch metadata backup and transfer;
+- prefer local-first tools without unofficial backend API access.
 
-## Why This Exists
+## Why It Helps
 
-ChatGPT is great for deep, iterative conversations, but long threads can become cumbersome:
+Long ChatGPT sessions are powerful, but they often become awkward to manage:
 
 - long assistant replies push useful context far off screen;
-- long user prompts make navigation harder;
-- lazily loaded history can make the page feel heavier;
-- branch relationships are easy to lose once multiple conversations split from each other.
+- long user prompts make scroll navigation slower;
+- branch history gets fragmented across separate conversations;
+- deleted parent chats can hide how surviving branches are related.
 
-ChatGPTFold exists to make those long sessions easier to scan, navigate, and revisit, while staying conservative about privacy and data handling.
+ChatGPTFold is designed to make those sessions easier to scan, revisit, and understand while keeping storage local and behavior conservative.
 
 ## Key Features
 
-### 1. Fold Long Conversations
+### 1. Long Conversation Folding
 
-- Height-based folding for long rendered messages
-- Supports both assistant replies and user messages
-- Code-block friendly behavior for code-heavy conversations
-- Works with dynamically loaded ChatGPT history
-- Conservative DOM fallback when markup changes
+- automatically collapses long assistant replies and user messages;
+- height-based detection instead of brittle fixed-length rules;
+- supports dynamically loaded ChatGPT history;
+- works for both user bubbles and assistant replies;
+- code-block friendly behavior for code-heavy conversations;
+- conservative selector fallback when ChatGPT markup changes;
+- runtime-stability fixes introduced in v1.2.2+.
 
-### 2. Map Conversation Branches
+### 2. Conversation Branch Map
 
-- Observed-only branch graph based on conversations you opened or scanned
-- Sidebar tree for browsing known branch relationships
-- Mind-map-like Map View for visual navigation
-- Click nodes to jump between conversations
-- Optional per-node notes and note previews
+- detects observed ChatGPT branch relationships;
+- shows a page-side tree browser for known branches;
+- includes a mind-map-like Map View for visual navigation;
+- supports pan, zoom, fit, and reset interactions;
+- supports collapsing any node to simplify the graph;
+- supports clicking nodes to navigate between conversations;
+- highlights the active conversation in the visible map.
 
-### 3. Keep Local Branch Memory
+### 3. Deleted Conversation Tombstones
 
-- Stores local branch graph metadata in browser storage
-- Export and import memory as JSON
-- Includes tools to clean invalid ghost nodes
-- No cloud sync; transfer is manual by design
+- if a parent conversation is deleted but its child branch still exists, the deleted parent is preserved as a grey tombstone node;
+- this keeps branch lineage understandable even when part of the history disappears;
+- deleted tombstones remain non-clickable as normal conversations;
+- clicking a deleted ancestor can jump to the visible branch marker when possible;
+- useless deleted dead branches are pruned from the visible graph;
+- notes can still be attached to useful tombstone nodes.
 
-### 4. Stay Local-First
+Example:
 
-- No telemetry or analytics
-- No ChatGPT backend API integration
-- No full message text storage
-- No `fetch` / `XMLHttpRequest` patching
+`A -> B (deleted) -> C`
+
+Instead of losing the structure, ChatGPTFold keeps `B` as a grey historical node when `C` still exists.
+
+### 4. Local Branch Memory
+
+- keeps a local genealogy graph in browser storage;
+- supports memory export/import as JSON;
+- supports manual backup and transfer between machines;
+- includes cleanup for invalid ghost nodes;
+- does not offer automatic cloud sync;
+- does not read ChatGPT's backend conversation tree.
+
+### 5. Privacy-First Design
+
+- no telemetry;
+- no analytics;
+- no external backend;
+- no ChatGPT backend API access;
+- no `fetch` / `XMLHttpRequest` patching;
+- no full message text storage;
+- only local browser storage.
 
 ## Screenshots
 
-Screenshots are not included yet. Planned examples:
+Screenshots are planned for:
 
 | Area | Description |
 |---|---|
 | Long message folding | Collapsed long replies and user messages |
-| Branch Map sidebar | Tree-style conversation branch browser |
-| Map View | Mind-map-like branch visualization |
-| Popup settings | Folding and Branch Map controls |
+| Branch Map sidebar | Tree-style branch browser |
+| Map View | Mind-map-like visualization with pan/zoom |
+| Deleted tombstones | Grey deleted parent nodes preserving branch lineage |
+| Popup settings | Folding and memory controls |
 
 ## Installation
 
-### Install From GitHub Release
+ChatGPTFold is currently distributed as an unpacked extension through GitHub Releases. It is not currently published on the Chrome Web Store.
 
-> ChatGPTFold is currently distributed as an unpacked extension through GitHub Releases. It is not currently published on the Chrome Web Store.
+### Install From GitHub Releases
 
-1. Go to GitHub Releases.
-2. Download `ChatGPTFold-v1.2.2.zip`.
+1. Go to [GitHub Releases](https://github.com/StanleyCaosky/ChatGPTFold/releases).
+2. Download `ChatGPTFold-v1.2.4.zip`.
 3. Extract it.
 4. Open `chrome://extensions/` or `edge://extensions/`.
 5. Enable **Developer mode**.
 6. Click **Load unpacked**.
 7. Select the extracted `dist` folder.
 
-Repository:
-
-- https://github.com/StanleyCaosky/ChatGPTFold
-- [GitHub Releases](https://github.com/StanleyCaosky/ChatGPTFold/releases)
+Repository: https://github.com/StanleyCaosky/ChatGPTFold
 
 ### Build From Source
-
-#### Prerequisites
-
-- Node.js 18+
-- npm
-
-#### Steps
 
 ```bash
 git clone https://github.com/StanleyCaosky/ChatGPTFold.git
 cd ChatGPTFold
 npm install
+npm run typecheck
+npm test
 npm run build
 ```
 
-Then load the generated `dist` folder in Chrome or Edge using **Load unpacked**.
+Then load `dist` as an unpacked extension in Chrome or Edge.
 
 ## Usage
 
-### Long Message Folding
+### Folding Long Messages
 
-After the extension is loaded:
+- Open ChatGPT.
+- Long messages are folded automatically.
+- Use Expand / Collapse controls to read or hide long content.
+- Configure thresholds in the extension popup.
 
-1. Open ChatGPT at `https://chatgpt.com` or `https://chat.openai.com`.
-2. ChatGPTFold activates automatically on matching pages.
-3. Long assistant replies and long user messages can be collapsed based on rendered size.
-4. Folded messages can be expanded or collapsed again from the page UI.
-
-This behavior is designed to keep long threads easier to scan while remaining conservative about what gets folded.
-
-### Branch Map
-
-Use the page-side Branch Map button to browse observed branch relationships. Advanced memory actions such as export, import, cleanup, and reset are available from the extension popup.
-
-The Branch Map helps you:
-
-- inspect observed parent-child relationships;
-- navigate among branch-related conversations;
-- review branch structure in a tree-like view;
-- keep optional notes on nodes.
-
-### Typical Branch Map Workflow
+### Branch Map Workflow
 
 1. Open a ChatGPT conversation.
 2. Let ChatGPTFold auto-scan observed branch markers.
-3. Open the Branch Map panel.
+3. Click the page-side Branch Map button.
 4. Browse the branch tree.
-5. Open Map View for a visual branch layout.
-6. Add optional notes to important nodes.
-7. Export Memory JSON as a local backup.
-
-Branch Map is observed-only. It only knows branches you opened or scanned, and export/import is a manual backup workflow, not cloud sync.
-
-### Map View
-
-The Map View provides a broader visual layout of the observed branch structure.
-
-Available interactions include:
-
-- pan;
-- zoom;
-- fit/reset viewport;
-- collapse/expand branch sections;
-- click-to-navigate between mapped conversations.
+5. Open Map View for visual graph navigation.
+6. Add notes to important branch nodes.
+7. Export Memory JSON as local backup.
 
 ### Memory Export / Import
 
-ChatGPTFold supports local memory transfer through JSON files.
-
-You can:
-
-- export local genealogy memory;
-- import previously exported memory;
-- clean invalid ghost nodes;
-- move branch metadata manually between browsers or machines.
-
-This is manual transfer only. There is currently no cloud sync.
+- Export local branch memory from the popup.
+- Import it on another browser or machine.
+- This is manual transfer, not cloud sync.
 
 ## Privacy & Permissions
 
 ChatGPTFold is designed to be local-first.
 
-The extension stores only local extension data, such as:
+The extension stores locally:
 
-- user settings;
+- settings;
 - folding preferences;
 - conversation genealogy metadata;
-- conversation IDs and titles needed for the Branch Map;
+- conversation IDs and titles needed for Branch Map;
 - parent-child branch edges;
-- optional user-written node notes.
+- optional user-written node notes;
+- deleted tombstone metadata.
 
-Conversation titles and IDs are stored only to make the local Branch Map usable.
-
-The extension does **not** store:
+The extension does not store:
 
 - full message text;
 - ChatGPT cookies;
 - session tokens;
 - API keys;
-- complete backend responses;
-- telemetry or analytics data.
+- full backend responses;
+- telemetry;
+- analytics data.
 
-It also does **not**:
+It also does not:
 
-- upload conversation data;
-- call ChatGPT backend APIs directly;
+- upload conversation data to an external backend;
+- read ChatGPT's full backend branch tree;
 - patch `fetch` or `XMLHttpRequest`;
-- inject cloud sync or account sync behavior.
-
-In short: 插件会在本地保存设置、分支图谱元数据、对话 ID/标题、父子边关系以及用户手动添加的节点注释；不会保存完整聊天正文，不读取 cookie/session，不上传数据。
+- provide cloud sync.
 
 ### Permissions
 
 Current permissions are intentionally minimal:
 
 - `storage`
-- host access to:
-  - `https://chatgpt.com/*`
-  - `https://chat.openai.com/*`
+- host permissions for `https://chatgpt.com/*` and `https://chat.openai.com/*`
 
-No additional permissions are required.
+Why they are needed:
+
+- `storage` is used for local settings and local branch memory.
+- Host permissions are used to run the extension on ChatGPT pages.
 
 ## Limitations
 
-Please keep the current scope in mind:
-
 - Branch Map is observed-only.
-- It records conversations you have opened or scanned.
+- It only knows conversations you have opened, scanned, imported, or observed with the extension.
 - It does not read ChatGPT's backend conversation tree.
-- Sidebar visibility is not the same as full account history.
-- Some behavior may break if ChatGPT changes its DOM.
-- Manual export/import is needed for cross-device transfer.
-- No cloud sync currently.
-- If ChatGPT changes its DOM structure, some folding or branch detection behavior may need updates.
-- Importing memory cannot verify conversations that are not currently visible in the sidebar unless they have a valid `/c/<id>` URL.
-- Manual export/import is a backup and transfer mechanism, not synchronization.
+- Sidebar visibility is not full account history.
+- ChatGPT DOM changes may break folding or branch detection.
+- Export/import is manual backup, not cloud sync.
+- Deleted tombstones preserve branch lineage only when enough local metadata exists.
+- The extension is not affiliated with OpenAI.
 
 ## Development
 
-### Project Structure
-
-```text
-src/
-├── content/          # Content scripts and page-side behavior
-├── popup/            # Popup UI
-├── shared/           # Shared types and helpers
-└── manifest.chrome.json
+```bash
+npm install
+npm run typecheck
+npm test
+npm run build
 ```
 
-### Scripts
+Build notes:
 
-- `npm run dev` - Build in watch mode
-- `npm run typecheck` - TypeScript checking
-- `npm test` - Run unit tests
-- `npm run build` - Production build
-
-### Local Build Notes
-
-The project uses a deterministic local manifest generation step during build. It writes a local `dist/manifest.json` from `src/manifest.chrome.json` without relying on remote schema fetches or unstable manifest finalization plugins.
+- content scripts are built as classic/IIFE bundles;
+- `dist/manifest.json` is generated locally from `src/manifest.chrome.json`;
+- the build does not rely on unstable remote manifest finalization plugins.
 
 ## Version Highlights
 
-For packaged builds, see the [GitHub Releases](https://github.com/StanleyCaosky/ChatGPTFold/releases) page.
+### v1.2.4 - Deleted marker highlight hotfix
+
+- Fixed page grey-out caused by overly broad deleted-ancestor marker highlighting.
+- Added strict branch-marker matching.
+- Added cleanup-safe marker highlight lifecycle.
+
+### v1.2.3 - Classic content script hotfix
+
+- Fixed ESM output in Chrome classic content scripts.
+- Built content scripts as IIFE bundles.
 
 ### v1.2.2 - Runtime stability and deterministic build
 
-- Runtime stability fixes
-- Suppressed production warnings
-- `Extension context invalidated` handling
-- Deterministic manifest build
-- Removed unstable web-extension manifest finalization
+- Reduced production warning noise.
+- Handled `Extension context invalidated`.
+- Added deterministic local manifest generation.
 
 ### v1.2.1 - Synthetic ghost cleanup
 
-- Fixed `WEB` synthetic ghost nodes
-- Improved cleanup/export/render consistency
+- Fixed `WEB` synthetic nodes.
+- Improved cleanup/export/render consistency.
 
-### v1.2.0 - Conversation Genealogy Branch Map
+### v1.2.0 - Conversation Branch Map
 
-- Added Conversation Genealogy Branch Map
-- Added Map View
-- Added local notes
-- Added memory export/import
+- Added Branch Map.
+- Added Map View.
+- Added local memory export/import.
+- Added node notes.
 
 ## Disclaimer
 
-ChatGPTFold is an unofficial browser extension for ChatGPT. It is not affiliated with, endorsed by, or sponsored by OpenAI.
+ChatGPTFold is an independent browser extension and is not affiliated with OpenAI. It works by observing the ChatGPT web UI and may require updates if the ChatGPT DOM changes.
 
 ## License
 
