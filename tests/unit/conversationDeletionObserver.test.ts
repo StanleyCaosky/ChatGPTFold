@@ -84,6 +84,15 @@ describe('conversationDeletionObserver', () => {
     vi.useRealTimers();
   });
 
+  it('finds a sidebar conversation id from a sibling link in the same row', async () => {
+    const mod = await import('../../src/content/conversationDeletionObserver');
+    const row = document.createElement('div');
+    row.innerHTML = '<a href="/c/row-id">Row title</a><button>Delete</button>';
+    document.body.appendChild(row);
+    const button = row.querySelector('button')!;
+    expect(mod.__TEST__.findSidebarConversationIdFromTarget(button)).toBe('row-id');
+  });
+
   it('same title different id only deletes bound conversation id', async () => {
     const mod = await import('../../src/content/conversationDeletionObserver');
     document.body.innerHTML = '';

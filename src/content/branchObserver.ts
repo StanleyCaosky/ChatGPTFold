@@ -10,6 +10,7 @@ import {
   PathSource,
   Confidence,
   BranchOrderedItem,
+  BranchPath,
 } from '../shared/branchTypes';
 import { findTurns } from './selectors';
 import { isStreamingActive } from './streaming';
@@ -541,6 +542,26 @@ export function findBestParentPath(
   };
 }
 
+function rekeyPath(graph: BranchGraph, path: BranchPath, nextPathId: string): void {
+  const oldPathId = path.pathId;
+  if (oldPathId === nextPathId) return;
+
+  graph.paths[nextPathId] = path;
+  delete graph.paths[oldPathId];
+  path.pathId = nextPathId;
+
+  for (const edge of graph.edges) {
+    if (edge.fromPathId === oldPathId) edge.fromPathId = nextPathId;
+    if (edge.toPathId === oldPathId) edge.toPathId = nextPathId;
+  }
+
+  for (const candidate of Object.values(graph.paths)) {
+    if (candidate.parentPathId === oldPathId) candidate.parentPathId = nextPathId;
+  }
+
+  if (graph.activePathId === oldPathId) graph.activePathId = nextPathId;
+}
+
 // ── Reconcile Observed Path ─────────────────────────────────────────
 
 export function reconcileObservedPath(
@@ -610,24 +631,26 @@ export function reconcileObservedPath(
   if (changeType === 'history-prepend' || changeType === 'history-expand') {
     const allPaths = Object.values(graph.paths);
     let bestMatch: (typeof allPaths)[0] | null = null;
-    let bestLCP = 0;
+    let bestScore = -1;
     for (const path of allPaths) {
-      const lcp = computeLCP(path.nodeIds, currentPath);
-      if (lcp > bestLCP) {
-        bestLCP = lcp;
+      const subseq = findContiguousSubsequence(path.nodeIds, currentPath);
+      const score = subseq.found ? path.nodeIds.length : computeLCP(path.nodeIds, currentPath);
+      if (score > bestScore) {
+        bestScore = score;
         bestMatch = path;
       }
     }
     for (const node of snapshot.nodes) {
       upsertNode(graph, node, graph.conversationId);
     }
-    if (bestMatch && currentPath.length >= bestMatch.nodeIds.length) {
+    if (bestMatch && bestScore > 0 && currentPath.length >= bestMatch.nodeIds.length) {
       bestMatch.nodeIds = currentPath;
       bestMatch.pathSignature = makePathSignature(
         graph.conversationId,
         currentPath
       );
-      bestMatch.pathId = makePathId(bestMatch.pathSignature);
+      const nextPathId = makePathId(bestMatch.pathSignature);
+      rekeyPath(graph, bestMatch, nextPathId);
       bestMatch.lastSeenAt = Date.now();
       bestMatch.updatedAt = Date.now();
       setActivePath(graph, bestMatch.pathId);
@@ -764,10 +787,10 @@ export function disconnectPathObserver(): void {
 
 function shorten(nodeId: string): string {
   if (nodeId.length <= 16) return nodeId;
-  return nodeId.slice(0, 12) + '\u2026';
+  return nodeId.slice(0, 12) + '…';
 }
 
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen - 1) + '\u2026';
+  return text.slice(0, maxLen - 1) + '…';
 }

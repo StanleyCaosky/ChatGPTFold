@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { recordError, activateFailSafeLevel1, activateFailSafeLevel2 } from '../../src/content/safety';
+import { recordError, activateFailSafeLevel1, activateFailSafeLevel2, cleanupScrollListeners, initScrollListener } from '../../src/content/safety';
 import { getState, forceResetRuntimeState } from '../../src/content/state';
 import { ERROR_WINDOW_MS, MAX_CORE_ERRORS, CONTAINMENT_ERROR_THRESHOLD } from '../../src/shared/constants';
 
@@ -56,5 +56,30 @@ describe('activateFailSafeLevel2', () => {
     activateFailSafeLevel2('test');
     expect(getState().failSafeLevel).toBe(2);
     expect(getState().hardDisabled).toBe(true);
+  });
+});
+
+describe('scroll listener lifecycle', () => {
+  beforeEach(() => {
+    forceResetRuntimeState();
+    cleanupScrollListeners();
+    document.body.innerHTML = '';
+  });
+
+  it('replaces the previous listener for the same scroll root', () => {
+    const scrollRoot = document.createElement('div');
+    const addSpy = vi.spyOn(scrollRoot, 'addEventListener');
+    const removeSpy = vi.spyOn(scrollRoot, 'removeEventListener');
+    Object.defineProperty(scrollRoot, 'scrollHeight', { value: 5000, configurable: true });
+    Object.defineProperty(scrollRoot, 'clientHeight', { value: 500, configurable: true });
+    Object.defineProperty(scrollRoot, 'scrollTop', { value: 2000, writable: true, configurable: true });
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({ overflowY: 'auto' } as unknown as CSSStyleDeclaration);
+    document.body.appendChild(scrollRoot);
+
+    initScrollListener(scrollRoot);
+    initScrollListener(scrollRoot);
+
+    expect(addSpy).toHaveBeenCalledTimes(2);
+    expect(removeSpy).toHaveBeenCalledTimes(1);
   });
 });

@@ -33,9 +33,21 @@ function findSidebarConversationIdFromTarget(target: EventTarget | null): string
   const directId = getConversationIdFromAnchor(anchor);
   if (directId) return directId;
 
-  const container = el.closest('[data-conversation-id]');
-  const candidate = container?.getAttribute('data-conversation-id') ?? '';
-  return candidate;
+  const dataContainer = el.closest('[data-conversation-id]');
+  const dataCandidate = dataContainer?.getAttribute('data-conversation-id') ?? '';
+  if (dataCandidate) return dataCandidate;
+
+  let container: Element | null = el;
+  let depth = 0;
+  while (container && container !== document.body && depth < 6) {
+    const anchors = Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href*="/c/"]'));
+    const ids = [...new Set(anchors.map(getConversationIdFromAnchor).filter(Boolean))];
+    if (ids.length === 1) return ids[0];
+    container = container.parentElement;
+    depth++;
+  }
+
+  return '';
 }
 
 function normalizeActionText(target: EventTarget | null): string {

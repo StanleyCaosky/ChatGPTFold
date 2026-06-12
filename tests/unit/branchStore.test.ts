@@ -71,6 +71,20 @@ describe('getConversationId', () => {
     expect(getConversationId()).toBe('abc-123-def');
   });
 
+  it('extracts mixed-case ids from /c/ paths', () => {
+    vi.spyOn(window, 'location', 'get').mockReturnValue({
+      pathname: '/c/Conv-ABC-123',
+    } as Location);
+    expect(getConversationId()).toBe('Conv-ABC-123');
+  });
+
+  it('rejects synthetic WEB ids from /c/ paths', () => {
+    vi.spyOn(window, 'location', 'get').mockReturnValue({
+      pathname: '/c/WEB:70faa19c-0634-4b85-865b-fe7a699ed94c',
+    } as Location);
+    expect(getConversationId()).toBe(encodeURIComponent('/c/WEB:70faa19c-0634-4b85-865b-fe7a699ed94c'));
+  });
+
   it('falls back to encoded pathname for non-conversation URL', () => {
     vi.spyOn(window, 'location', 'get').mockReturnValue({
       pathname: '/some/path',

@@ -10,7 +10,7 @@ export function getLastAssistantTurn(): HTMLElement | null {
   );
   for (let i = turns.length - 1; i >= 0; i--) {
     const turn = turns[i];
-    if (turn.querySelector('[data-message-id]')) {
+    if (turn.querySelector('[data-message-author-role="assistant"] [data-message-id], [data-message-author-role="assistant"]')) {
       return turn;
     }
   }

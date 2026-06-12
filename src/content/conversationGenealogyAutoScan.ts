@@ -1,6 +1,7 @@
 import { Config } from '../shared/config';
 import { GenealogyDiagnostics, GenealogyUpdateResult } from '../shared/conversationGenealogyTypes';
 import { isStreamingActive } from './streaming';
+import { debugLog } from './logger';
 import {
   extractConversationParentMarker,
   extractCurrentConversationId,
@@ -211,6 +212,7 @@ export function cleanupGenealogyAutoScan(): void {
   sidebarObserver = null;
   for (const dispose of historyCleanup) dispose();
   historyCleanup = [];
+  historyPatched = false;
   diagnosticsListener = null;
   state.lastAutoScannedConversationId = '';
   state.lastAutoScannedMarkerText = '';
@@ -322,4 +324,3 @@ export const __TEST__ = {
   clearPendingTimers,
   notifyPotentialMarkerMutation,
 };
-import { debugLog } from './logger';

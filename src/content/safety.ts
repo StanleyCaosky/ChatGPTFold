@@ -6,6 +6,20 @@ import {
 } from '../shared/constants';
 import { getState, setPaused } from './state';
 import { findScrollRoot } from './selectors';
+import { registerDisposeCallback } from './extensionContext';
+
+const scrollListeners = new Map<HTMLElement, () => void>();
+
+registerDisposeCallback(() => {
+  cleanupScrollListeners();
+});
+
+export function cleanupScrollListeners(): void {
+  for (const [scrollRoot, listener] of scrollListeners.entries()) {
+    scrollRoot.removeEventListener('scroll', listener);
+  }
+  scrollListeners.clear();
+}
 
 export function recordError(err: Error): void {
   const state = getState();
@@ -47,9 +61,13 @@ export function activateFailSafeLevel2(reason: string): void {
 
 export function initScrollListener(thread: HTMLElement): void {
   const scrollRoot = findScrollRoot(thread);
-  let lastScrollTop = scrollRoot.scrollTop;
+  const existing = scrollListeners.get(scrollRoot);
+  if (existing) {
+    scrollRoot.removeEventListener('scroll', existing);
+  }
 
-  scrollRoot.addEventListener('scroll', () => {
+  let lastScrollTop = scrollRoot.scrollTop;
+  const listener = () => {
     const state = getState();
     if (state.hardDisabled) return;
 
@@ -70,5 +88,8 @@ export function initScrollListener(thread: HTMLElement): void {
     if (state.paused && direction === 'down' && current >= NEAR_TOP_THRESHOLD_PX) {
       setPaused(false);
     }
-  }, { passive: true });
+  };
+
+  scrollListeners.set(scrollRoot, listener);
+  scrollRoot.addEventListener('scroll', listener, { passive: true });
 }

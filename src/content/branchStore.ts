@@ -8,6 +8,7 @@ import {
   EdgeSource,
 } from '../shared/branchTypes';
 import { safeStorageGet, safeStorageRemove, safeStorageSet } from './extensionContext';
+import { isRealConversationId } from './conversationGenealogyStore';
 
 const STORAGE_PREFIX = 'longconv_branch_graph::';
 
@@ -25,8 +26,8 @@ export function stableHash(str: string): string {
 // ── Conversation ID ─────────────────────────────────────────────────
 
 export function getConversationId(): string {
-  const match = location.pathname.match(/\/c\/([a-f0-9-]+)/);
-  if (match) return match[1];
+  const match = location.pathname.match(/\/c\/([^/?#]+)/);
+  if (match && isRealConversationId(match[1])) return match[1];
   if (location.pathname === '/' || location.pathname === '') return 'unknown';
   return encodeURIComponent(location.pathname);
 }

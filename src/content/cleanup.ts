@@ -3,6 +3,7 @@ import { OriginalStyleSnapshot } from '../shared/types';
 import { removeLongconvClasses } from './dom-utils';
 import { getState, resetRuntimeState } from './state';
 import { disconnectThreadObserver, disconnectBodyObserver } from './observer';
+import { cleanupScrollListeners } from './safety';
 
 const originalStyles = new WeakMap<HTMLElement, OriginalStyleSnapshot>();
 const styledElements = new Set<HTMLElement>();
@@ -50,6 +51,7 @@ function removeLongconvAttrs(root: ParentNode = document): void {
 
 export function cleanupPageModifications(): void {
   disconnectThreadObserver();
+  cleanupScrollListeners();
 
   const thread = document.getElementById('thread');
   if (!thread) return;
@@ -66,6 +68,7 @@ export function cleanupPageModifications(): void {
 
 export function cleanupAll(options: CleanupOptions = {}): void {
   disconnectThreadObserver();
+  cleanupScrollListeners();
   if (!options.keepBodyObserver) {
     disconnectBodyObserver();
   }

@@ -19,7 +19,14 @@ import { buildCleanSummary, buildDiagnosticsText, buildImportSummary } from '../
 import { CurrentConversation, GenealogyDiagnostics, SidebarCatalogEntry } from '../shared/conversationGenealogyTypes';
 
 const STORAGE_KEY = 'longconv_config';
-const APP_VERSION = '1.0.0';
+
+function getAppVersion(): string {
+  try {
+    return chrome.runtime?.getManifest?.().version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 const ids = [
   'enabled',
@@ -251,7 +258,7 @@ async function handleRunScanNow(): Promise<void> {
 async function handleExportMemory(): Promise<void> {
   const { graph } = await loadGenealogyGraph();
   const context = makePopupContext(graph.updatedAt);
-  const exportData = exportGenealogyMemory(graph, context, {}, APP_VERSION);
+  const exportData = exportGenealogyMemory(graph, context, {}, getAppVersion());
   downloadJson(createGenealogyMemoryFilename(), JSON.stringify(exportData, null, 2));
   setNotice('Local genealogy memory exported.');
 }

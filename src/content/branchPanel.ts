@@ -19,6 +19,7 @@ import {
   getBranchDiagnostics,
 } from './branchObserver';
 import { findTurns } from './selectors';
+import { debugLog } from './logger';
 
 let branchMapBtn: HTMLElement | null = null;
 let branchPanel: HTMLElement | null = null;
@@ -147,10 +148,10 @@ async function handleRecordPath(): Promise<void> {
   lastDiagnostics = getBranchDiagnostics(graph, snapshot);
   lastDiagnostics.reconcileErrors = result.markerResult?.errors ?? [];
 
-  console.log('[LongConv Branch Map] Record result:', {
+  debugLog('[LongConv Branch Map] Record result:', () => ({
     diagnostics: lastDiagnostics,
     markerResult: result.markerResult,
-  });
+  }));
 
   refreshPanel(graph);
 }
@@ -178,10 +179,10 @@ async function handleReset(): Promise<void> {
   lastDiagnostics = getBranchDiagnostics(graph, snapshot);
   lastDiagnostics.reconcileErrors = result.markerResult?.errors ?? [];
 
-  console.log('[LongConv Branch Map] Reset + rebuild:', {
+  debugLog('[LongConv Branch Map] Reset + rebuild:', () => ({
     diagnostics: lastDiagnostics,
     markerResult: result.markerResult,
-  });
+  }));
 
   refreshPanel(graph);
 }
@@ -521,10 +522,10 @@ export async function initBranchSystem(thread: HTMLElement): Promise<void> {
 
   const diag = getBranchDiagnostics(graph, snapshot);
   diag.reconcileErrors = result.markerResult?.errors ?? [];
-  console.log('[LongConv Branch Map] Init:', {
+  debugLog('[LongConv Branch Map] Init:', () => ({
     diagnostics: diag,
     markerResult: result.markerResult,
-  });
+  }));
 
   createBranchMapButton();
 

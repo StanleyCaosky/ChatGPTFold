@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../../src/shared/config';
 
 const updateConversationGenealogy = vi.fn(async () => ({
@@ -50,6 +50,11 @@ describe('conversation genealogy auto scan', async () => {
     mod.initGenealogyAutoScan({ ...DEFAULT_CONFIG });
   });
 
+  afterEach(() => {
+    mod.cleanupGenealogyAutoScan();
+    vi.useRealTimers();
+  });
+
   it('does not schedule when auto scan is disabled', () => {
     mod.cleanupGenealogyAutoScan();
     mod.initGenealogyAutoScan({ ...DEFAULT_CONFIG, branchMapAutoScanEnabled: false });
@@ -90,5 +95,15 @@ describe('conversation genealogy auto scan', async () => {
     mod.handleStreamingSettledForGenealogy();
     vi.advanceTimersByTime(1201);
     expect(updateConversationGenealogy).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores and can re-patch history after cleanup', () => {
+    const patchedPushState = history.pushState;
+    mod.cleanupGenealogyAutoScan();
+    expect(history.pushState).not.toBe(patchedPushState);
+
+    const restoredPushState = history.pushState;
+    mod.initGenealogyAutoScan({ ...DEFAULT_CONFIG });
+    expect(history.pushState).not.toBe(restoredPushState);
   });
 });

@@ -354,6 +354,29 @@ describe('reconcileObservedPath — A/B/C/D/E/F/G tree', () => {
     expect(edgeSet.has(`${idC}->${idF}`)).toBe(true);
     expect(edgeSet.has(`${idC}->${idG}`)).toBe(true);
   });
+  it('rekeys expanded paths and keeps edges/children attached', () => {
+    const graph = createEmptyGraph('test-conv');
+    const parent = makePathIds(['m1', 'm2', 'm3']);
+    const child = makePathIds(['m1', 'm2', 'c3']);
+    const expandedParent = makePathIds(['m0', 'm1', 'm2', 'm3']);
+
+    reconcileObservedPath(graph, makeSnapshot(parent), { reason: 'manual' });
+    reconcileObservedPath(graph, makeSnapshot(child), { reason: 'manual' });
+
+    const oldParentId = makePathId(makePathSignature('test-conv', parent));
+    const childId = makePathId(makePathSignature('test-conv', child));
+    expect(graph.paths[oldParentId]).toBeDefined();
+    expect(graph.paths[childId].parentPathId).toBe(oldParentId);
+
+    graph.lastObservedPath = parent;
+    reconcileObservedPath(graph, makeSnapshot(expandedParent), { reason: 'manual' });
+
+    const newParentId = makePathId(makePathSignature('test-conv', expandedParent));
+    expect(graph.paths[oldParentId]).toBeUndefined();
+    expect(graph.paths[newParentId]).toBeDefined();
+    expect(graph.paths[childId].parentPathId).toBe(newParentId);
+    expect(graph.edges.some((edge) => edge.fromPathId === newParentId || edge.toPathId === newParentId)).toBe(true);
+  });
 });
 
 // ── Additional reconciliation tests ─────────────────────────────────
@@ -804,4 +827,3 @@ describe('getBranchDiagnostics', () => {
     expect(diag.markers[0].childStartNodeId).toBe(makeNodeId('m2'));
   });
 });
-

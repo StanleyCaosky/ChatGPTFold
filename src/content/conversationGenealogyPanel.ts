@@ -269,7 +269,7 @@ async function handleScan(): Promise<void> {
   lastSidebarCatalog = sidebarCatalog;
   lastCurrentConversation = currentConversation;
   seedExpandedState(graph, sidebarCatalog, currentConversation);
-  console.log('[LongConv Genealogy] Scan:', diagnostics);
+  debugLog('[LongConv Genealogy] Scan:', diagnostics);
   refreshPanel(graph, diagnostics, sidebarCatalog, currentConversation);
 }
 
@@ -285,7 +285,7 @@ async function handleReset(): Promise<void> {
   lastSidebarCatalog = sidebarCatalog;
   lastCurrentConversation = currentConversation;
   seedExpandedState(graph, sidebarCatalog, currentConversation);
-  console.log('[LongConv Genealogy] Reset + rebuild:', diagnostics);
+  debugLog('[LongConv Genealogy] Reset + rebuild:', diagnostics);
   refreshPanel(graph, diagnostics, sidebarCatalog, currentConversation);
 }
 
@@ -1683,7 +1683,7 @@ function navigateToConversation(node: HydratedConversationNode): void {
     return;
   }
   if (target.url) {
-    console.debug('[LongConv Genealogy] navigate', node.title, target.url);
+    debugLog('[LongConv Genealogy] navigate', () => ({ title: node.title, url: target.url }));
     window.location.assign(target.url);
   }
 }
@@ -1871,7 +1871,13 @@ function showHint(message: string): void {
   hint.className = 'longconv-not-loaded-hint';
   hint.setAttribute(DATA_ATTRS.inserted, '1');
   hint.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100000;background:var(--longconv-bg);border:1px solid var(--longconv-btn-border);border-radius:8px;padding:16px 20px;box-shadow:0 4px 16px rgba(0,0,0,0.15);max-width:320px;font-size:13px;color:var(--longconv-btn-hover-color);white-space:pre-wrap;';
-  hint.innerHTML = `<div style="font-weight:600;margin-bottom:8px;">Notice</div><div>${message}</div>`;
+  const title = document.createElement('div');
+  title.style.cssText = 'font-weight:600;margin-bottom:8px;';
+  title.textContent = 'Notice';
+  const body = document.createElement('div');
+  body.textContent = message;
+  hint.appendChild(title);
+  hint.appendChild(body);
   const closeBtn = document.createElement('button');
   closeBtn.textContent = '×';
   closeBtn.style.cssText = 'position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;font-size:16px;color:#888;';
@@ -1883,7 +1889,7 @@ function showHint(message: string): void {
 
 export async function initGenealogySystem(): Promise<void> {
   const { diagnostics } = await updateConversationGenealogy();
-  console.log('[LongConv Genealogy] Init:', diagnostics);
+  debugLog('[LongConv Genealogy] Init:', diagnostics);
   createGenealogyButton();
 }
 

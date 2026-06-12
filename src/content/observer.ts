@@ -46,6 +46,11 @@ export function initBodyObserver(
   onThreadFound = onFound;
   onThreadLost = onLost;
 
+  if (bodyObserver) {
+    scheduleReinitCheck();
+    return;
+  }
+
   bodyObserver = new MutationObserver(() => {
     if (!ensureActiveContentScript()) return;
     scheduleReinitCheck();
@@ -97,6 +102,9 @@ function collectTurnsFromMutation(mutation: MutationRecord): HTMLElement[] {
 
 export function initThreadObserver(thread: HTMLElement): void {
   if (!ensureActiveContentScript()) return;
+  threadObserver?.disconnect();
+  threadObserver = null;
+  clearPendingTimers();
   currentThread = thread;
 
   threadObserver = new MutationObserver((mutations) => {
@@ -153,6 +161,7 @@ function scheduleDynamicRescan(reason: string): void {
 export function disconnectThreadObserver(): void {
   threadObserver?.disconnect();
   threadObserver = null;
+  currentThread = null;
   if (dynamicRescanTimer) {
     clearTimeout(dynamicRescanTimer);
     dynamicRescanTimer = null;

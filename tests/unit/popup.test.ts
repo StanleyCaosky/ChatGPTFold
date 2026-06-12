@@ -20,6 +20,9 @@ const sendMessage = vi.fn(async (_tabId: number, msg: { type: string }) => {
 });
 
 const mockChrome = {
+  runtime: {
+    getManifest: vi.fn(() => ({ version: '1.2.4' })),
+  },
   storage: {
     local: {
       get: vi.fn(async (key: string) => (key in store ? { [key]: store[key] } : {})),
